@@ -51,11 +51,11 @@
           <div class="sl" id="t-bslider"><div class="f"></div><span class="ic">☀</span></div></div>
         <div class="pnl t-time"><div class="lbl"><span>Tonight</span><span id="t-left"></span></div>
           <div class="tl" id="t-tl"><div class="bar"></div><div class="done"></div><div class="now"></div></div></div>
-        <button class="btn t-until" id="t-until"><span class="u1">Keep on until</span><span class="u2" id="t-until-at">No limit ▾</span></button>
+        <button class="g-btn t-until" id="t-until"><span class="u1">Keep on until</span><span class="u2" id="t-until-at">No limit ▾</span></button>
       </div>
       <div class="t-favs">
         <div class="sh"><h2 id="t-fav-h">Favourites</h2><a href="#patterns">See all patterns ›</a></div>
-        <div class="row cards" id="t-favs"></div>
+        <div class="g-row cards" id="t-favs"></div>
       </div>
     </section>
 
@@ -80,7 +80,7 @@
       <div class="c-left">
         <div class="hdr"><h1 id="c-title" spellcheck="false">Untitled design</h1><span class="c-pen" id="c-pen">✎</span>
           <span class="grow"></span><span class="saved" id="c-saved"></span>
-          <button class="btn c-new" id="c-new">＋ New</button>
+          <button class="g-btn c-new" id="c-new">＋ New</button>
           <button class="fold" id="c-fold">📁 —</button></div>
         <div class="hero c-hero" id="c-hero">
           <button class="live" id="c-live"><span class="rd"></span><span>Live on lights</span><span class="tog"></span></button>
@@ -90,8 +90,8 @@
       </div>
       <div class="c-right">
         <div class="f"><label>Colours · <span id="c-count"></span> <span class="t3">tap one to change it</span></label>
-          <div class="row c-sws" id="c-sws"></div>
-          <div class="row c-quick" id="c-quick"></div>
+          <div class="g-row c-sws" id="c-sws"></div>
+          <div class="g-row c-quick" id="c-quick"></div>
           <input type="color" id="c-picker" class="c-picker" tabindex="-1"></div>
         <div class="f"><label>Animation</label><div class="ag" id="c-anims"></div>
           <a href="#" class="c-more" id="c-more"></a></div>
@@ -108,20 +108,20 @@
     <section class="pg s-pg" id="v-setup" hidden>
       <div class="hdr"><h1>Light setup</h1><div class="dev" id="s-ctrls"></div><span class="grow"></span>
         <span class="saved s-acct" id="s-acct"></span></div>
-      <div class="row s-body">
+      <div class="g-row s-body">
         <div class="ed" id="s-ed">
           <div class="tip" id="s-tip"></div>
           <div class="tool"><span data-tool="draw" class="on">✏️ Draw</span><span data-tool="move">✋ Move</span><span id="s-undo">↶ Undo</span></div>
         </div>
         <div class="s-side">
-          <div class="f"><label>Photo</label><div class="row s-photo"><div class="s-thumb" id="s-thumb"></div>
-            <button class="btn grow" id="s-upload">📷 Add photo</button><button class="btn" id="s-rmphoto" hidden>✕</button></div>
+          <div class="f"><label>Photo</label><div class="g-row s-photo"><div class="s-thumb" id="s-thumb"></div>
+            <button class="g-btn grow" id="s-upload">📷 Add photo</button><button class="g-btn" id="s-rmphoto" hidden>✕</button></div>
             <input type="file" id="s-file" accept="image/*" hidden></div>
           <div class="f" id="s-look-f"><label>Look</label><div class="seg" id="s-look"><span data-look="night">🌙 Night</span><span data-look="original">Original</span><span data-look="drawing">Drawing</span></div></div>
           <div class="f"><label>Light runs <span class="t3">· drawn on the picture</span> <span class="saved" id="s-saved"></span></label>
             <div class="s-runs" id="s-runs"></div>
-            <button class="btn s-add" id="s-add">＋ Add run</button></div>
-          <div class="f"><label>Find the start</label><button class="btn s-blink" id="s-blink">💡 Blink the first 10 lights</button>
+            <button class="g-btn s-add" id="s-add">＋ Add run</button></div>
+          <div class="f"><label>Find the start</label><button class="g-btn s-blink" id="s-blink">💡 Blink the first 10 lights</button>
             <div class="note">ⓘ Lights the start of the selected run on the real string so you can put ▶ on the right end. Patterns then flow the same way on screen as on the house.</div></div>
           <span class="grow"></span>
           <div class="note">No photo? The app uses a simple house drawing with one straight run.</div>
@@ -131,7 +131,7 @@
   </main>
 
   <div class="pop" id="gs-pop" hidden></div>
-  <div class="toast" id="gs-toast" hidden><span id="gs-toast-text"></span><button class="u" id="gs-toast-undo" hidden>Undo</button></div>
+  <div class="g-toast" id="gs-toast" hidden><span id="gs-toast-text"></span><button class="u" id="gs-toast-undo" hidden>Undo</button></div>
 </div>
 
 {{ state|json_script:"gs-initial" }}

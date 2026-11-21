@@ -368,7 +368,7 @@
   // ------------------------------------------------------------ cards
   function card(p, opts) {
     opts = opts || {};
-    const c = h('div', 'card');
+    const c = h('div', 'g-card');
     c.setAttribute('role', 'button');
     const pv = h('div', 'pv'); const cv = h('canvas');
     cv.width = 540; cv.height = 224; cv.style.objectFit = 'cover';
@@ -906,9 +906,9 @@
         nm.onchange = () => { pushHist(); r.name = nm.value.trim() || 'Run ' + (i + 1); runsChanged(); };
         const ld = h('input', 'ld'); ld.type = 'number'; ld.min = 1; ld.max = 5000; ld.value = r.leds;
         ld.onchange = () => { pushHist(); r.leds = clamp(parseInt(ld.value, 10) || 1, 1, 5000); runsChanged(); };
-        const rev = h('button', 'btn', '⇄ Flip start');
+        const rev = h('button', 'g-btn', '⇄ Flip start');
         rev.onclick = () => { pushHist(); r.reverse = !r.reverse; runsChanged(); };
-        const del = h('button', 'btn', 'Delete');
+        const del = h('button', 'g-btn', 'Delete');
         del.disabled = SU.runs.length < 2;
         if (del.disabled) del.style.opacity = '.4';
         del.onclick = () => { if (SU.runs.length < 2) return; pushHist(); SU.runs.splice(i, 1); SU.active = 0; SU.open = -1; runsChanged(); };
