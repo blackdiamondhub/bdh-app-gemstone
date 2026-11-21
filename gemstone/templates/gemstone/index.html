@@ -41,8 +41,9 @@
     <!-- Tonight -->
     <section class="pg" id="v-tonight" hidden>
       <div class="hero" id="t-hero">
+        <button class="g-lights" data-lights aria-pressed="false" aria-label="Lights: preview or live">💡 Lights<span class="g-st">PREVIEW</span><span class="g-sw"></span></button>
         <div class="dev m gs-float" data-chips></div>
-        <div class="stat"><div class="a">Now playing</div><div class="b" id="t-name">—</div><div class="c" id="t-sub"></div></div>
+        <div class="stat"><div class="a" id="t-a">Now playing</div><div class="b" id="t-name">—</div><div class="c" id="t-sub"></div></div>
         <div class="insets" id="t-insets"></div>
       </div>
       <div class="band">
@@ -64,6 +65,7 @@
       <div class="hdr"><h1>Patterns</h1><div class="dev m" data-chips></div>
         <label class="search"><span>🔍</span><input id="p-search" type="search" placeholder="Search patterns" autocomplete="off"></label></div>
       <div class="hero p-hero" id="p-hero">
+        <button class="g-lights" data-lights aria-pressed="false" aria-label="Lights: preview or live">💡 Lights<span class="g-st">PREVIEW</span><span class="g-sw"></span></button>
         <div class="stat"><div class="a" id="p-a">Now playing</div><div class="b" id="p-name">—</div><div class="c" id="p-sub"></div></div>
       </div>
       <div class="p-scroll" id="p-scroll">
@@ -83,9 +85,9 @@
           <button class="g-btn c-new" id="c-new">＋ New</button>
           <button class="fold" id="c-fold">📁 —</button></div>
         <div class="hero c-hero" id="c-hero">
-          <button class="live" id="c-live"><span class="rd"></span><span>Live on lights</span><span class="tog"></span></button>
+          <button class="g-lights" data-lights aria-pressed="false" aria-label="Lights: preview or live">💡 Lights<span class="g-st">PREVIEW</span><span class="g-sw"></span></button>
           <div class="dev m gs-float" data-chips></div>
-          <div class="stat"><div class="a">Preview</div><div class="b" id="c-pname"></div><div class="sw" id="c-pswatch"></div></div>
+          <div class="stat"><div class="a" id="c-a">Preview</div><div class="b" id="c-pname"></div><div class="sw" id="c-pswatch"></div></div>
         </div>
       </div>
       <div class="c-right">
@@ -131,7 +133,7 @@
   </main>
 
   <div class="pop" id="gs-pop" hidden></div>
-  <div class="g-toast" id="gs-toast" hidden><span id="gs-toast-text"></span><button class="u" id="gs-toast-undo" hidden>Undo</button></div>
+  <div class="g-toast" id="gs-toast" hidden><span id="gs-toast-text"></span></div>
 </div>
 
 {{ state|json_script:"gs-initial" }}

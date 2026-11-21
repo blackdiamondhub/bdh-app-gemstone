@@ -53,22 +53,19 @@
 
   // ------------------------------------------------------------ toast + popover
   let toastTimer = null;
-  function toast(parts, undoFn, err) {
-    const t = $('gs-toast'), tx = $('gs-toast-text'), u = $('gs-toast-undo');
+  function toast(parts, err) {
+    const t = $('gs-toast'), tx = $('gs-toast-text');
     tx.textContent = '';
     (Array.isArray(parts) ? parts : [parts]).forEach((p) => {
       if (p && typeof p === 'object') tx.appendChild(h('b', '', p.b));
       else tx.appendChild(document.createTextNode(String(p)));
     });
     t.classList.toggle('err', !!err);
-    t.classList.toggle('has-u', !!undoFn);
-    u.hidden = !undoFn;
-    u.onclick = async () => { t.hidden = true; if (undoFn) await undoFn(); };
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, undoFn ? 8000 : 4000);
+    toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
   }
-  const fail = (e) => toast(e.message || String(e), null, true);
+  const fail = (e) => toast(e.message || String(e), true);
 
   const pop = $('gs-pop');
   function openPop(anchor, build) {
@@ -353,14 +350,74 @@
       const r = await api(url('play'), { ids, pattern: ref });
       selCtrls().forEach((c) => { c.state = { on: true, pattern: preview || (c.state && c.state.pattern) }; });
       renderView();
-      toast(['Playing ', { b: r.name }, ' on ' + r.on], async () => {
-        try { await api(url('undo'), { token: r.undo }); toast('Back to what was playing'); } catch (e) { fail(e); }
-        later(refreshState, 600);
-      });
+      toast(['Playing ', { b: r.name }, ' on ' + r.on]);
       later(refreshState, 2500);
     } catch (e) { fail(e); }
   }
-  const playPattern = (p) => play({ id: p.id }, p);
+
+  // ------------------------------------------------------------ lights switch (off = preview on the picture only)
+  // The switch mirrors the real lights: it is on when any selected controller is on.
+  let PV = null; // { ref, pat } previewed on the picture while the lights are off
+  const lightsOn = () => selCtrls().some((c) => c.state && c.state.on);
+  function choose(ref, pat) {
+    if (lightsOn()) { PV = null; play(ref, pat); return; }
+    PV = { ref, pat };
+    renderView();
+  }
+  async function setLights(on) {
+    const list = selCtrls();
+    if (!list.length) return;
+    try {
+      if (on && view === 'create') {
+        await api(url('live'), { ids: sel, pattern: spec() });
+        list.forEach((c) => { c.state = { on: true, pattern: previewPattern() }; });
+        toast(['Live: changes show on ', { b: namesOf(list) }]);
+      } else if (on && PV) {
+        const p = PV; PV = null;
+        await play(p.ref, p.pat);
+        return;
+      } else {
+        await api(url('power'), { ids: sel, on });
+        list.forEach((c) => { c.state = Object.assign({}, c.state, { on }); });
+        toast([on ? 'Turned on ' : 'Turned off ', { b: namesOf(list) }]);
+      }
+      renderView();
+      later(refreshState, 1500);
+    } catch (e) { fail(e); }
+  }
+  function renderLights() {
+    const on = lightsOn();
+    root.querySelectorAll('[data-lights]').forEach((b) => {
+      b.classList.toggle('on', on);
+      b.querySelector('.g-st').textContent = on ? 'LIVE' : 'PREVIEW';
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    ['t-hero', 'p-hero', 'c-hero'].forEach((id) => {
+      const el = $(id);
+      el.classList.toggle('g-lv', on);
+      el.classList.toggle('g-pvw', !on && (id === 'c-hero' || !!PV));
+    });
+  }
+  root.querySelectorAll('[data-lights]').forEach((b) => { b.onclick = () => setLights(!lightsOn()); });
+  // What the Tonight / Patterns pictures show: the preview while the lights are off, else the real lights.
+  function shown(c) {
+    if (PV && !lightsOn()) return { pattern: PV.pat, on: true, preview: true };
+    const st = (c && c.state) || {};
+    return { pattern: st.pattern, on: !!st.on, preview: false };
+  }
+  function heroText(list, nameId, subId, aId) {
+    const first = list[0], s = shown(first);
+    if (aId) $(aId).textContent = s.preview ? 'Preview' : 'Now playing';
+    if (s.preview) {
+      $(nameId).textContent = s.pattern.name || 'Preview';
+      $(subId).textContent = 'On the picture only · real lights unchanged';
+      return;
+    }
+    $(nameId).textContent = first ? (s.on ? ((s.pattern && s.pattern.name) || 'On') : 'Lights off') : '—';
+    $(subId).textContent = statusLine(list) + (list.length && view === 'patterns'
+      ? (lightsOn() ? ' · tap a pattern to play it' : ' · tap a pattern to preview it') : '');
+  }
+  const playPattern = (p) => choose({ id: p.id }, p);
   const SOLIDS = [['Warm white', '#fff1e0'], ['White', '#ffffff'], ['Red', '#e3262b'], ['Orange', '#ff7a1a'], ['Gold', '#ffb800'],
     ['Green', '#1fa64a'], ['Teal', '#14b8a6'], ['Blue', '#2f6bff'], ['Purple', '#8b3dff'], ['Pink', '#ff4fa3']];
   const solidPat = (name, hex) => ({ id: 'bdh-solid-' + hex.slice(1), name, colors: [hex], animation: 'motionless', brightness: 255, speed: 0, direction: 0 });
@@ -378,8 +435,10 @@
     nm.appendChild(h('span', 'an', pretty(p.animation || 'motionless')));
     c.appendChild(nm);
     const first = selCtrls()[0];
-    if (first && first.state && first.state.on && first.state.pattern && first.state.pattern.id === p.id) {
-      c.classList.add('on'); c.appendChild(h('span', 'pl', 'PLAYING'));
+    if (PV && !lightsOn() && PV.pat.id === p.id) {
+      c.classList.add('g-pvw'); c.appendChild(h('span', 'pl g-pvb', 'PREVIEW'));
+    } else if (first && first.state && first.state.on && first.state.pattern && first.state.pattern.id === p.id) {
+      c.classList.add('on'); c.appendChild(h('span', 'pl', 'ON LIGHTS'));
     }
     const more = h('button', 'more', '⋯');
     more.title = 'Open in Create';
@@ -392,7 +451,7 @@
     const b = h('button', 'solid');
     const i = h('i'); i.style.background = hex; i.style.boxShadow = '0 0 18px ' + hex;
     b.append(i, document.createTextNode(name));
-    b.onclick = () => play({ kind: 'solid', color: hex, name }, solidPat(name, hex));
+    b.onclick = () => choose({ kind: 'solid', color: hex, name }, solidPat(name, hex));
     return b;
   }
 
@@ -439,6 +498,7 @@
     fixSel();
     renderShell();
     renderChips();
+    renderLights();
     if (view === 'tonight') renderTonight();
     else if (view === 'patterns') renderPatterns();
     else if (view === 'create') renderCreate();
@@ -458,8 +518,7 @@
     const sc = heroScene('t', $('t-hero'));
     sc.set(first);
     const st = (first && first.state) || {};
-    $('t-name').textContent = first ? (st.on ? ((st.pattern && st.pattern.name) || 'On') : 'Lights off') : '—';
-    $('t-sub').textContent = statusLine(list);
+    heroText(list, 't-name', 't-sub', 't-a');
     // insets for the other selected controllers
     const ins = $('t-insets');
     ins.textContent = '';
@@ -519,18 +578,7 @@
     row.textContent = '';
     pats.slice(0, 12).forEach((p) => row.appendChild(card(p)));
   }
-  $('t-pwr').onclick = async () => {
-    const list = selCtrls();
-    if (!list.length) return;
-    const on = !list.some((c) => c.state && c.state.on);
-    try {
-      await api(url('power'), { ids: sel, on });
-      list.forEach((c) => { c.state = Object.assign({}, c.state, { on }); });
-      toast([on ? 'Turned on ' : 'Turned off ', { b: namesOf(list) }]);
-      renderView();
-      later(refreshState, 1500);
-    } catch (e) { fail(e); }
-  };
+  $('t-pwr').onclick = () => setLights(!lightsOn());
   $('t-until').setAttribute('data-pop', '');
   $('t-until').onclick = (e) => {
     const btn = e.currentTarget;
@@ -595,9 +643,7 @@
   async function renderPatterns() {
     const list = selCtrls(), first = list[0];
     heroScene('p', $('p-hero')).set(first);
-    const st = (first && first.state) || {};
-    $('p-name').textContent = first ? (st.on ? ((st.pattern && st.pattern.name) || 'On') : 'Lights off') : '—';
-    $('p-sub').textContent = statusLine(list) + (list.length ? ' · tap a pattern to play it' : '');
+    heroText(list, 'p-name', 'p-sub', 'p-a');
     if (!S.configured || !ctrls().length) return;
     const solids = $('p-solids');
     if (!solids.childElementCount) SOLIDS.forEach(([n, c]) => solids.appendChild(solidTile(n, c)));
@@ -646,7 +692,7 @@
   // ------------------------------------------------------------ create
   const QUICK = [['Red', '#e3262b'], ['Green', '#1fa64a'], ['Warm white', '#fdf4bc'], ['Gold', '#ffb800'], ['Blue', '#2f6bff'],
     ['Purple', '#8b3dff'], ['Orange', '#ff7a1a'], ['Pink', '#ff4fa3'], ['White', '#ffffff'], ['Teal', '#14b8a6']];
-  const C = { design: null, id: '', folder: null, selIdx: 0, more: false, live: false, dirty: false,
+  const C = { design: null, id: '', folder: null, selIdx: 0, more: false, dirty: false,
     saving: false, again: false, saveT: null, liveT: null, guestName: '' };
   function newDesign() {
     C.design = { colors: ['#e3262b', '#1fa64a', '#fdf4bc', '#ffb800'], animation: 'starry', brightness: 100, speed: 128, direction: 0, name: 'Untitled design' };
@@ -693,7 +739,7 @@
     clearTimeout(C.saveT);
     savedText('Saving\u2026', 'wait');
     C.saveT = setTimeout(saveDesign, 1500);
-    if (C.live) { clearTimeout(C.liveT); C.liveT = setTimeout(pushLive, 800); }
+    if (lightsOn()) { clearTimeout(C.liveT); C.liveT = setTimeout(pushLive, 800); }
   }
   async function saveDesign() {
     if (C.saving) { C.again = true; return; }
@@ -736,9 +782,7 @@
     const sc = heroScene('c', $('c-hero'));
     sc.set(list[0]);
     renderCreateHeader();
-    $('c-hero').classList.toggle('lv', C.live);
-    $('c-live').classList.toggle('on', C.live);
-    $('c-live').querySelector('span:nth-child(2)').textContent = C.live ? 'Live on ' + namesOf(list) : 'Live on lights';
+    $('c-a').textContent = lightsOn() ? 'Live on ' + namesOf(list.filter((c) => c.state && c.state.on)) : 'Preview · real lights unchanged';
     const ps = $('c-pswatch'); ps.textContent = '';
     C.design.colors.forEach((c) => { const i = h('i'); i.style.background = c; ps.appendChild(i); });
     // colours
@@ -795,11 +839,6 @@
   makeSlider($('c-speed'), (v) => { C.design.speed = Math.round(v * 255 / 100); }, () => changed());
   makeSlider($('c-bright'), (v) => { C.design.brightness = Math.max(1, v); $('c-bval').textContent = C.design.brightness + '%'; }, () => changed());
   $('c-dir').querySelectorAll('span').forEach((s) => { s.onclick = () => { C.design.direction = +s.dataset.d; changed(); }; });
-  $('c-live').onclick = () => {
-    C.live = !C.live;
-    renderCreate();
-    if (C.live) { pushLive(); toast(['Live: changes show on ', { b: namesOf(selCtrls()) }]); }
-  };
   $('c-new').onclick = () => { newDesign(); renderCreate(); };
   const title = $('c-title');
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
@@ -1098,15 +1137,15 @@
     if (document.hidden) return;
     tick++;
     const t = tick / 4;
-    const first = selCtrls()[0], st = (first && first.state) || {};
+    const first = selCtrls()[0], st = (first && first.state) || {}, sh = shown(first);
     if (view === 'tonight') {
-      scenes.t && scenes.t.draw(st.pattern, st.on, t);
+      scenes.t && scenes.t.draw(sh.pattern, sh.on, t);
       $('t-insets').querySelectorAll('.inset').forEach((b, i) => {
         const c = selCtrls()[i + 1];
         if (b._scene && c) b._scene.draw(c.state && c.state.pattern, c.state && c.state.on, t);
       });
     } else if (view === 'patterns') {
-      scenes.p && scenes.p.draw(st.pattern, st.on, t);
+      scenes.p && scenes.p.draw(sh.pattern, sh.on, t);
     } else if (view === 'create') {
       const p = previewPattern();
       scenes.c && scenes.c.draw(p, true, t);
