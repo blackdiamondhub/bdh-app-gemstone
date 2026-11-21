@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Lights{% endblock %}
+{% block body_class %}gs-page{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="{% static 'gemstone/gemstone.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="gs" id="gs"
+     data-state-url="{% url 'gemstone_state' %}"
+     data-library-url="{% url 'gemstone_library' %}"
+     data-ours-url="{% url 'gemstone_ours' %}"
+     data-play-url="{% url 'gemstone_play' %}"
+     data-undo-url="{% url 'gemstone_undo' %}"
+     data-power-url="{% url 'gemstone_power' %}"
+     data-brightness-url="{% url 'gemstone_brightness' %}"
+     data-until-url="{% url 'gemstone_until' %}"
+     data-design-url="{% url 'gemstone_design' %}"
+     data-live-url="{% url 'gemstone_live' %}"
+     data-folders-url="{% url 'gemstone_folders' %}"
+     data-layout-url="{% url 'gemstone_layout' 'CID' %}"
+     data-upload-url="{% url 'gemstone_photo_upload' 'CID' %}"
+     data-blink-url="{% url 'gemstone_blink' 'CID' %}"
+     data-photo-url="{% url 'gemstone_photo' 'CID' %}">
+  {% csrf_token %}
+  <nav class="gs-rail" id="gs-rail">
+    <a class="ri" data-view="tonight" href="#tonight"><i>🌙</i>Tonight</a>
+    <a class="ri" data-view="patterns" href="#patterns"><i>✨</i>Patterns</a>
+    <a class="ri" data-view="create" href="#create"><i>🎨</i>Create</a>
+    <a class="ri gs-admin" data-view="setup" href="#setup" hidden><i>⚙️</i>Setup</a>
+    <span class="sp"></span>
+    <span class="who" id="gs-who">Guest</span>
+  </nav>
+
+  <main class="gs-main">
+    <div class="gs-msg" id="gs-msg" hidden></div>
+
+    <!-- Tonight -->
+    <section class="pg" id="v-tonight" hidden>
+      <div class="hero" id="t-hero">
+        <div class="dev m gs-float" data-chips></div>
+        <div class="stat"><div class="a">Now playing</div><div class="b" id="t-name">—</div><div class="c" id="t-sub"></div></div>
+        <div class="insets" id="t-insets"></div>
+      </div>
+      <div class="band">
+        <button class="pwr" id="t-pwr" aria-label="Lights on or off">⏻</button>
+        <div class="pnl t-bright"><div class="lbl"><span>Brightness</span><span id="t-bval">—</span></div>
+          <div class="sl" id="t-bslider"><div class="f"></div><span class="ic">☀</span></div></div>
+        <div class="pnl t-time"><div class="lbl"><span>Tonight</span><span id="t-left"></span></div>
+          <div class="tl" id="t-tl"><div class="bar"></div><div class="done"></div><div class="now"></div></div></div>
+        <button class="btn t-until" id="t-until"><span class="u1">Keep on until</span><span class="u2" id="t-until-at">No limit ▾</span></button>
+      </div>
+      <div class="t-favs">
+        <div class="sh"><h2 id="t-fav-h">Favourites</h2><a href="#patterns">See all patterns ›</a></div>
+        <div class="row cards" id="t-favs"></div>
+      </div>
+    </section>
+
+    <!-- Patterns -->
+    <section class="pg" id="v-patterns" hidden>
+      <div class="hdr"><h1>Patterns</h1><div class="dev m" data-chips></div>
+        <label class="search"><span>🔍</span><input id="p-search" type="search" placeholder="Search patterns" autocomplete="off"></label></div>
+      <div class="hero p-hero" id="p-hero">
+        <div class="stat"><div class="a" id="p-a">Now playing</div><div class="b" id="p-name">—</div><div class="c" id="p-sub"></div></div>
+      </div>
+      <div class="p-scroll" id="p-scroll">
+        <div class="shelf" id="p-fav-shelf"><div class="sh"><h2>★ Favourites</h2></div><div class="scroller cards" id="p-favs"></div></div>
+        <div class="shelf"><div class="sh"><h2>Ours</h2><a href="#" id="p-golib">Browse the Gemstone library ›</a></div>
+          <div class="chipr" id="p-folders"></div><div class="scroller cards" id="p-ours"></div></div>
+        <div id="p-lib"></div>
+        <div class="shelf"><div class="sh"><h2>Solid colours</h2></div><div class="scroller" id="p-solids"></div></div>
+      </div>
+    </section>
+
+    <!-- Create -->
+    <section class="pg c-pg" id="v-create" hidden>
+      <div class="c-left">
+        <div class="hdr"><h1 id="c-title" spellcheck="false">Untitled design</h1><span class="c-pen" id="c-pen">✎</span>
+          <span class="grow"></span><span class="saved" id="c-saved"></span>
+          <button class="btn c-new" id="c-new">＋ New</button>
+          <button class="fold" id="c-fold">📁 —</button></div>
+        <div class="hero c-hero" id="c-hero">
+          <button class="live" id="c-live"><span class="rd"></span><span>Live on lights</span><span class="tog"></span></button>
+          <div class="dev m gs-float" data-chips></div>
+          <div class="stat"><div class="a">Preview</div><div class="b" id="c-pname"></div><div class="sw" id="c-pswatch"></div></div>
+        </div>
+      </div>
+      <div class="c-right">
+        <div class="f"><label>Colours · <span id="c-count"></span> <span class="t3">tap one to change it</span></label>
+          <div class="row c-sws" id="c-sws"></div>
+          <div class="row c-quick" id="c-quick"></div>
+          <input type="color" id="c-picker" class="c-picker" tabindex="-1"></div>
+        <div class="f"><label>Animation</label><div class="ag" id="c-anims"></div>
+          <a href="#" class="c-more" id="c-more"></a></div>
+        <div class="f"><label class="lr"><span>Speed</span><span>Slow · · · Fast</span></label>
+          <div class="sl gray" id="c-speed"><div class="f"></div></div></div>
+        <div class="f"><label class="lr"><span>Brightness</span><span id="c-bval"></span></label>
+          <div class="sl white" id="c-bright"><div class="f"></div></div></div>
+        <div class="f"><label>Direction <span class="t3" id="c-dirnote"></span></label>
+          <div class="seg" id="c-dir"><span data-d="0">→</span><span data-d="1">←</span><span data-d="2">↔</span><span data-d="3">→←</span><span data-d="4">←→</span></div></div>
+      </div>
+    </section>
+
+    <!-- Setup (admin) -->
+    <section class="pg s-pg" id="v-setup" hidden>
+      <div class="hdr"><h1>Light setup</h1><div class="dev" id="s-ctrls"></div><span class="grow"></span>
+        <span class="saved s-acct" id="s-acct"></span></div>
+      <div class="row s-body">
+        <div class="ed" id="s-ed">
+          <div class="tip" id="s-tip"></div>
+          <div class="tool"><span data-tool="draw" class="on">✏️ Draw</span><span data-tool="move">✋ Move</span><span id="s-undo">↶ Undo</span></div>
+        </div>
+        <div class="s-side">
+          <div class="f"><label>Photo</label><div class="row s-photo"><div class="s-thumb" id="s-thumb"></div>
+            <button class="btn grow" id="s-upload">📷 Add photo</button><button class="btn" id="s-rmphoto" hidden>✕</button></div>
+            <input type="file" id="s-file" accept="image/*" hidden></div>
+          <div class="f" id="s-look-f"><label>Look</label><div class="seg" id="s-look"><span data-look="night">🌙 Night</span><span data-look="original">Original</span><span data-look="drawing">Drawing</span></div></div>
+          <div class="f"><label>Light runs <span class="t3">· drawn on the picture</span> <span class="saved" id="s-saved"></span></label>
+            <div class="s-runs" id="s-runs"></div>
+            <button class="btn s-add" id="s-add">＋ Add run</button></div>
+          <div class="f"><label>Find the start</label><button class="btn s-blink" id="s-blink">💡 Blink the first 10 lights</button>
+            <div class="note">ⓘ Lights the start of the selected run on the real string so you can put ▶ on the right end. Patterns then flow the same way on screen as on the house.</div></div>
+          <span class="grow"></span>
+          <div class="note">No photo? The app uses a simple house drawing with one straight run.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="pop" id="gs-pop" hidden></div>
+  <div class="toast" id="gs-toast" hidden><span id="gs-toast-text"></span><button class="u" id="gs-toast-undo" hidden>Undo</button></div>
+</div>
+
+{{ state|json_script:"gs-initial" }}
+<script src="{% static 'gemstone/gemstone.js' %}"></script>
+{% endblock %}
