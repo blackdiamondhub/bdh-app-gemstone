@@ -554,3 +554,32 @@ class PhoneLayoutTests(SimpleTestCase):
     def test_has_phone_layout(self):
         css = (ROOT / "static/gemstone/gemstone.css").read_text(encoding="utf-8")
         self.assertIn("@media(max-width:700px)", css.replace(" ", ""))
+
+
+class LightsSwitchTests(SimpleTestCase):
+    """One Lights switch: off = preview on the picture only, on = live on the real lights."""
+
+    def setUp(self):
+        self.html = (ROOT / "templates/gemstone/index.html").read_text(encoding="utf-8")
+        self.js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
+
+    def test_every_preview_picture_has_the_switch(self):
+        for hero in ("t-hero", "p-hero", "c-hero"):
+            block = self.html.split(f'id="{hero}"', 1)[1].split("</div>", 1)[0]
+            self.assertIn("data-lights", block, hero)
+
+    def test_old_live_button_and_undo_are_gone(self):
+        for gone in ("c-live", "gs-toast-undo"):
+            self.assertNotIn(gone, self.html)
+        self.assertNotIn("url('undo')", self.js)
+        self.assertIsNone(re.search(r"\bC\.live\b", self.js))
+
+    def test_taps_go_through_the_switch(self):
+        # Pattern cards and solid colours must not play directly; choose() previews while the lights are off.
+        self.assertNotRegex(self.js, r"onclick\s*=\s*\(\)\s*=>\s*play\(")
+        self.assertIn("const playPattern = (p) => choose(", self.js)
+
+    def test_every_element_the_script_looks_up_exists(self):
+        ids = set(re.findall(r'id="([^"{]+)"', self.html)) | set(re.findall(r'json_script:"([\w-]+)"', self.html))
+        missing = sorted({i for i in re.findall(r"\$\('([\w-]+)'\)", self.js) if i not in ids})
+        self.assertEqual(missing, [])
