@@ -514,6 +514,34 @@ class HubFrameLayoutTests(SimpleTestCase):
                 self.assertNotIn(bad, text, f"{path.name}: {bad}")
 
 
+class FrameworkClassTests(SimpleTestCase):
+    """The runtime base.html loads Bootstrap, so any class we share with it
+    silently picks up its styles (.card went dark, .row chips went full-width)."""
+
+    def test_no_bootstrap_class_names(self):
+        fixture = pathlib.Path(__file__).with_name("bootstrap_classes.txt").read_text(encoding="utf-8")
+        bootstrap = {ln.strip() for ln in fixture.splitlines() if ln.strip() and not ln.startswith("#")}
+        ours = {}
+        for path in ROOT.glob("static/**/*.css"):
+            text = re.sub(r"url\([^)]*\)", "", path.read_text(encoding="utf-8"))
+            for name in re.findall(r"\.(-?[_a-zA-Z][\w-]*)", text):
+                ours.setdefault(name, path.name)
+        for path in ROOT.glob("templates/**/*.html"):
+            for attr in re.findall(r'class="([^"{]*)"', path.read_text(encoding="utf-8")):
+                for name in attr.split():
+                    ours.setdefault(name, path.name)
+        for path in ROOT.glob("static/**/*.js"):
+            text = path.read_text(encoding="utf-8")
+            pats = (r"\bh\(\s*'[^']*'\s*,\s*'([^']*)'", r"classList\.(?:add|toggle|remove)\(\s*'([^']*)'")
+            for pat in pats:
+                for attr in re.findall(pat, text):
+                    for name in attr.split():
+                        ours.setdefault(name, path.name)
+        self.assertGreater(len(ours), 50)
+        clashes = sorted(f"{name} ({where})" for name, where in ours.items() if name in bootstrap)
+        self.assertEqual(clashes, [])
+
+
 class PhoneLayoutTests(SimpleTestCase):
     def test_grid_columns_can_shrink(self):
         css = list(ROOT.glob("static/**/*.css"))
