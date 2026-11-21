@@ -1,0 +1,56 @@
+{% extends 'hub_settings/_layout.html' %}
+{% load static %}
+
+{% block title %}Photos &amp; light paths · Settings{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'gemstone/gemstone.css' %}">
+<style>.hst-main{max-width:none}</style>
+{% endblock %}
+
+{% block section %}
+<div class="hst-head">
+  <div>
+    <h2>Photos &amp; light paths</h2>
+    <p>Add a photo of each controller's lights and trace where they run, so patterns look on screen the way they look in real life.</p>
+  </div>
+</div>
+
+<div class="gs gs-set" id="gs" data-mode="setup"
+     data-state-url="{% url 'gemstone_state' %}"
+     data-layout-url="{% url 'gemstone_layout' 'CID' %}"
+     data-upload-url="{% url 'gemstone_photo_upload' 'CID' %}"
+     data-blink-url="{% url 'gemstone_blink' 'CID' %}"
+     data-photo-url="{% url 'gemstone_photo' 'CID' %}">
+  {% csrf_token %}
+  <div class="gs-msg" id="gs-msg" hidden></div>
+  <section class="s-pg" id="v-setup" hidden>
+    <div class="hdr"><div class="dev" id="s-ctrls"></div><span class="grow"></span>
+      <span class="saved s-acct" id="s-acct"></span></div>
+    <div class="g-row s-body">
+      <div class="ed" id="s-ed">
+        <div class="tip" id="s-tip"></div>
+        <div class="tool"><span data-tool="draw" class="on">✏️ Draw</span><span data-tool="move">✋ Move</span><span id="s-undo">↶ Undo</span></div>
+      </div>
+      <div class="s-side">
+        <div class="f"><label>Photo</label><div class="g-row s-photo"><div class="s-thumb" id="s-thumb"></div>
+          <button class="g-btn grow" id="s-upload">📷 Add photo</button><button class="g-btn" id="s-rmphoto" hidden aria-label="Remove photo">✕</button></div>
+          <input type="file" id="s-file" accept="image/*" hidden></div>
+        <div class="f" id="s-look-f"><label>Look</label><div class="seg" id="s-look"><span data-look="night">🌙 Night</span><span data-look="original">Original</span><span data-look="drawing">Drawing</span></div></div>
+        <div class="f"><label>Light runs <span class="t3">· drawn on the picture</span> <span class="saved" id="s-saved"></span></label>
+          <div class="s-runs" id="s-runs"></div>
+          <button class="g-btn s-add" id="s-add">＋ Add run</button></div>
+        <div class="f"><label>Find the start</label><button class="g-btn s-blink" id="s-blink">💡 Blink the first 10 lights</button>
+          <div class="note">ⓘ Lights the start of the selected run on the real string so you can put ▶ on the right end. Patterns then flow the same way on screen as in real life.</div></div>
+        <div class="note">No photo? The app shows a simple drawing with one straight run.</div>
+      </div>
+    </div>
+  </section>
+  <div class="pop" id="gs-pop" hidden></div>
+  <div class="g-toast" id="gs-toast" hidden><span id="gs-toast-text"></span></div>
+</div>
+
+{{ state|json_script:"gs-initial" }}
+<script src="{% static 'gemstone/gemstone.js' %}"></script>
+{% endblock %}

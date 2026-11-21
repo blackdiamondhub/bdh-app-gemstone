@@ -1,4 +1,4 @@
-from bdh_sdk import PluginSpec, Setting, Tile
+from bdh_sdk import PluginSpec, Setting, SettingsPage, Tile
 from bdh_sdk.plugins import LIFECYCLE_ALWAYS, NETWORK_OUTBOUND, SECRET, STR
 
 spec = PluginSpec(
@@ -14,6 +14,10 @@ spec = PluginSpec(
         Setting("gemstone_email", "Gemstone email", type=STR, default="",
                 help="The email you sign in to the Gemstone Lights app with."),
         Setting("gemstone_password", "Gemstone password", type=SECRET),
+    ),
+    settings_pages=(
+        SettingsPage("Photos & light paths", "gemstone_settings", icon="fas fa-lightbulb",
+                     subtitle="A photo of each controller's lights and where they run"),
     ),
     api_version=2,
     # The Gemstone cloud.
