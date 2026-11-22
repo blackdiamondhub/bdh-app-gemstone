@@ -1,4 +1,5 @@
-"""Background worker: turns lights off at "keep on until" and cleans up guest designs daily."""
+"""Background worker: turns lights off at "keep on until", keeps them off on a
+"lights off tonight" night, and cleans up guest designs daily."""
 import datetime as dt
 import logging
 import os
@@ -74,6 +75,10 @@ def tick(now=None):
         service.enforce_until(now)
     except Exception:  # noqa: BLE001
         log.exception("keep-on-until check failed")
+    try:
+        service.enforce_dark(now)
+    except Exception:  # noqa: BLE001
+        log.exception("lights-off-tonight check failed")
     try:
         run_cleanup(now)
     except Exception:  # noqa: BLE001

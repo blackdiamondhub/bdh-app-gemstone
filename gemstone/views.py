@@ -69,6 +69,13 @@ def _state(request):
     except cloud.CloudError as exc:
         out["error"] = "Can't reach Gemstone right now"
         log.warning("state: %s", exc)
+        return out
+    # Autopilot is a nice-to-have on Tonight: don't let it break the page.
+    try:
+        out["schedule"] = service.schedule()
+        out["tonight_event"] = service.tonight_event()
+    except (cloud.CloudError, service.Invalid) as exc:
+        log.warning("state (autopilot): %s", exc)
     return out
 
 
@@ -82,6 +89,21 @@ def settings_page(request):
     if not is_admin(request):
         raise Http404
     return render(request, "gemstone/settings.html", {"active": "gemstone", "state": _state(request)})
+
+
+@require_GET
+def autopilot_page(request):
+    # Settings → Gemstone → Autopilot. Admins only.
+    if not is_admin(request):
+        raise Http404
+    data = None
+    if cloud.configured():
+        try:
+            data = service.autopilot()
+        except (cloud.CloudError, service.Invalid) as exc:
+            log.warning("autopilot page: %s", exc)
+    return render(request, "gemstone/autopilot.html",
+                  {"active": "gemstone", "configured": cloud.configured(), "autopilot": data})
 
 
 @require_GET
@@ -141,6 +163,27 @@ def until(request):
     out = service.set_until(b.get("ids"), b.get("at"), admin=is_admin(request))
     worker.poke()
     return JsonResponse({"until": out})
+
+
+@require_POST
+@_guarded
+def schedule(request):
+    b = _body(request)
+    dark = b.get("dark")
+    out = service.set_schedule(on_offset=b.get("on_offset"), off_time=b.get("off_time"),
+                               dark_tonight=None if dark is None else bool(dark),
+                               admin=is_admin(request))
+    worker.poke()
+    return JsonResponse({"schedule": out})
+
+
+@require_http_methods(["GET", "POST"])
+@_guarded
+def autopilot_api(request):
+    _admin_only(request)
+    if request.method == "GET":
+        return JsonResponse(service.autopilot())
+    return JsonResponse({"settings": service.set_autopilot(_body(request), admin=True)})
 
 
 @require_POST
