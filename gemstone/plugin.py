@@ -6,7 +6,7 @@ spec = PluginSpec(
     app="gemstone",
     urls="gemstone.urls",
     tiles=(
-        Tile("Lights", "gemstone_index", "gemstone/hub/icon.svg", section="lodge",
+        Tile("Gemstone", "gemstone_index", "gemstone/hub/icon.svg", section="lodge",
              subtitle="Gemstone patterns, colours and designs", order=40),
     ),
     status="gemstone.homepage.status",

@@ -27,7 +27,7 @@
   const mod = (a, n) => ((a % n) + n) % n;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   // Gap between preview lights, as a share of the picture's width.
-  const DOT_GAP = 1 / 45;
+  const DOT_GAP = 1 / 30;
   function url(name, cid) {
     const u = D[name + 'Url'];
     return cid == null ? u : u.replace('CID', encodeURIComponent(cid));
@@ -290,6 +290,11 @@
     draw(pattern, on, t) {
       if (!this.el.offsetParent) return;
       this.fit();
+      // Motionless or off scenes look the same every tick; don't repaint them.
+      const still = !on || !pattern || (pattern.animation || 'motionless') === 'motionless';
+      const sig = still ? this.size + '|' + (on ? JSON.stringify(pattern) : 'off') : '';
+      if (still && sig === this.drawn) return;
+      this.drawn = sig;
       const g = this.fx.getContext('2d');
       g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       g.clearRect(0, 0, this.w, this.h);
@@ -316,7 +321,7 @@
   function strip(canvas, p, t, arc) {
     const w = canvas.width, hh = canvas.height, g = canvas.getContext('2d');
     g.clearRect(0, 0, w, hh);
-    const n = arc ? 26 : 22;
+    const n = arc ? 15 : 13;
     for (let j = 0; j < n; j++) {
       const f = (j + 0.5) / n, x = w * (0.06 + 0.88 * f);
       const y = arc ? hh * (0.62 - 0.3 * Math.sin(f * Math.PI)) : hh * 0.5;
@@ -339,24 +344,46 @@
     if (!LIB) LIB = (await api(url('library'))).patterns || [];
     return LIB;
   }
+  // Writes reach the lights a couple of seconds after a tap (the cloud needs a
+  // gap between commands), so the screen changes straight away and the write
+  // goes out behind it. While any write is out, polled state is ignored so it
+  // can't flip the screen back to what the lights showed before the tap.
+  let pending = 0, stateT = null;
   async function refreshState() {
+    if (pending) return;
     try {
-      S = await api(url('state'));
+      const s = await api(url('state'));
+      if (pending) return;
+      S = s;
       fixSel();
       renderView();
     } catch (e) { /* keep the last state */ }
   }
-  const later = (fn, ms) => setTimeout(fn, ms);
+  function refreshSoon(ms) { clearTimeout(stateT); stateT = setTimeout(refreshState, ms); }
+  // Show ``apply`` now, send ``send`` in the background, put things back if it fails.
+  async function optimistic(list, apply, send) {
+    const before = list.map((c) => [c, c.state]);
+    apply();
+    renderView();
+    pending++;
+    try { return await send(); } catch (e) {
+      before.forEach(([c, st]) => { c.state = st; });
+      renderView();
+      fail(e);
+      return null;
+    } finally {
+      pending--;
+      if (!pending) refreshSoon(2000);
+    }
+  }
 
   async function play(ref, preview) {
-    const ids = sel.slice();
-    try {
-      const r = await api(url('play'), { ids, pattern: ref });
-      selCtrls().forEach((c) => { c.state = { on: true, pattern: preview || (c.state && c.state.pattern) }; });
-      renderView();
-      toast(['Playing ', { b: r.name }, ' on ' + r.on]);
-      later(refreshState, 2500);
-    } catch (e) { fail(e); }
+    const ids = sel.slice(), list = selCtrls();
+    const name = (preview && preview.name) || ref.name || 'pattern';
+    toast(['Playing ', { b: name }, ' on ' + namesOf(list)]);
+    await optimistic(list,
+      () => list.forEach((c) => { c.state = { on: true, pattern: preview || (c.state && c.state.pattern) }; }),
+      () => api(url('play'), { ids, pattern: ref }));
   }
 
   // ------------------------------------------------------------ lights switch (off = preview on the picture only)
@@ -369,25 +396,21 @@
     renderView();
   }
   async function setLights(on) {
-    const list = selCtrls();
+    const list = selCtrls(), ids = sel.slice();
     if (!list.length) return;
-    try {
-      if (on && view === 'create') {
-        await api(url('live'), { ids: sel, pattern: spec() });
-        list.forEach((c) => { c.state = { on: true, pattern: previewPattern() }; });
-        toast(['Live: changes show on ', { b: namesOf(list) }]);
-      } else if (on && PV) {
-        const p = PV; PV = null;
-        await play(p.ref, p.pat);
-        return;
-      } else {
-        await api(url('power'), { ids: sel, on });
-        list.forEach((c) => { c.state = Object.assign({}, c.state, { on }); });
-        toast([on ? 'Turned on ' : 'Turned off ', { b: namesOf(list) }]);
-      }
-      renderView();
-      later(refreshState, 1500);
-    } catch (e) { fail(e); }
+    if (on && view === 'create') {
+      const body = { ids, pattern: spec() }, pat = previewPattern();
+      toast(['Live: changes show on ', { b: namesOf(list) }]);
+      await optimistic(list, () => list.forEach((c) => { c.state = { on: true, pattern: pat }; }),
+        () => api(url('live'), body));
+    } else if (on && PV) {
+      const p = PV; PV = null;
+      await play(p.ref, p.pat);
+    } else {
+      toast([on ? 'Turning on ' : 'Turning off ', { b: namesOf(list) }]);
+      await optimistic(list, () => list.forEach((c) => { c.state = Object.assign({}, c.state, { on }); }),
+        () => api(url('power'), { ids, on }));
+    }
   }
   function renderLights() {
     const on = lightsOn();
@@ -463,6 +486,7 @@
   const VIEWS = ['tonight', 'patterns', 'create'];
   let view = SETUP ? 'setup' : 'tonight';
   const scenes = {};
+  const insets = new Map();
   function heroScene(key, el, opts) {
     if (!scenes[key]) scenes[key] = new Scene(el, opts);
     return scenes[key];
@@ -530,22 +554,32 @@
     const st = (first && first.state) || {};
     heroText(list, 't-name', 't-sub', 't-a');
     // insets for the other selected controllers
-    const ins = $('t-insets');
-    ins.textContent = '';
-    list.slice(1, 4).forEach((c) => {
-      const b = h('button', 'inset');
-      const pic = h('div', 'pic'); b.appendChild(pic);
-      const lb = h('div', 'lb'), tx = h('div');
-      tx.append(h('b', '', c.name), h('small', '', c.state && c.state.on ? ((c.state.pattern && c.state.pattern.name) || 'On') : 'Off'));
-      const dot = h('span', 'dot');
-      if (c.state && c.state.on) { dot.style.background = '#3ddc84'; dot.style.boxShadow = '0 0 8px #3ddc84'; }
-      lb.append(tx, dot); b.appendChild(lb);
-      b.onclick = () => { sel = [c.id].concat(sel.filter((i) => i !== c.id)); saveSel(); renderView(); };
-      ins.appendChild(b);
-      const s = new Scene(pic, { small: true });
-      s.set(c);
-      b._scene = s;
+    // Insets (and their canvases) are kept per controller and only updated,
+    // so re-rendering doesn't pile up canvases on the display.
+    const ins = $('t-insets'), want = list.slice(1, 4);
+    const keep = new Set(want.map((c) => c.id));
+    insets.forEach((v, id) => { if (!keep.has(id)) insets.delete(id); });
+    want.forEach((c, i) => {
+      let it = insets.get(c.id);
+      if (!it) {
+        const b = h('button', 'inset');
+        const pic = h('div', 'pic'); b.appendChild(pic);
+        const lb = h('div', 'lb'), tx = h('div'), nm = h('b'), sub = h('small'), dot = h('span', 'dot');
+        tx.append(nm, sub); lb.append(tx, dot); b.appendChild(lb);
+        b.onclick = () => { sel = [c.id].concat(sel.filter((x) => x !== c.id)); saveSel(); renderView(); };
+        b._scene = new Scene(pic, { small: true });
+        it = { b, nm, sub, dot };
+        insets.set(c.id, it);
+      }
+      const on = !!(c.state && c.state.on);
+      it.nm.textContent = c.name;
+      it.sub.textContent = on ? ((c.state.pattern && c.state.pattern.name) || 'On') : 'Off';
+      it.dot.style.background = on ? '#3ddc84' : '';
+      it.dot.style.boxShadow = on ? '0 0 8px #3ddc84' : '';
+      it.b._scene.set(c);
+      if (ins.children[i] !== it.b) ins.insertBefore(it.b, ins.children[i] || null);
     });
+    while (ins.children.length > want.length) ins.lastChild.remove();
     const anyOn = list.some((c) => c.state && c.state.on);
     $('t-pwr').classList.toggle('on', anyOn);
     if (bright == null || !brightTimer) {
@@ -585,8 +619,15 @@
     } catch (e) { row.textContent = ''; row.appendChild(h('div', 'empty', e.message)); return; }
     if (view !== 'tonight') return;
     $('t-fav-h').textContent = title;
+    pats = pats.slice(0, 12);
+    // Only rebuild the cards when what they show has changed.
+    const first = selCtrls()[0], fs = (first && first.state) || {};
+    const key = JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors]),
+      PV && !lightsOn() ? PV.pat.id : null, fs.on && fs.pattern ? fs.pattern.id : null]);
+    if (row._key === key && row.children.length) return;
+    row._key = key;
     row.textContent = '';
-    pats.slice(0, 12).forEach((p) => row.appendChild(card(p)));
+    pats.forEach((p) => row.appendChild(card(p)));
   }
   if (!SETUP) {
   $('t-pwr').onclick = () => setLights(!lightsOn());
@@ -611,12 +652,14 @@
   }
   async function setUntil(at) {
     closePop();
+    const prev = S.until;
+    toast(at ? ['Lights go off at ', { b: at }] : 'No time limit');
+    pending++;
     try {
       const r = await api(url('until'), { ids: sel, at });
       S.until = r.until;
-      toast(r.until ? ['Lights go off at ', { b: fmtTime(new Date(r.until.at)) }] : 'No time limit');
-      renderView();
-    } catch (e) { fail(e); }
+    } catch (e) { S.until = prev; fail(e); }
+    finally { pending--; renderView(); }
   }
 
   // ------------------------------------------------------------ sliders
@@ -641,12 +684,18 @@
     (v) => {
       clearTimeout(brightTimer);
       brightTimer = setTimeout(async () => {
-        const pct = Math.max(1, v);
+        const pct = Math.max(1, v), list = selCtrls();
+        const old = list.map((c) => [c, c.state && c.state.pattern && c.state.pattern.brightness]);
+        list.forEach((c) => { if (c.state && c.state.pattern) c.state.pattern.brightness = Math.round(pct * 255 / 100); });
+        brightTimer = null;
+        pending++;
         try {
           await api(url('brightness'), { ids: sel, brightness: pct });
-          selCtrls().forEach((c) => { if (c.state && c.state.pattern) c.state.pattern.brightness = Math.round(pct * 255 / 100); });
-        } catch (e) { fail(e); }
-        brightTimer = null;
+        } catch (e) {
+          old.forEach(([c, b]) => { if (b != null && c.state && c.state.pattern) c.state.pattern.brightness = b; });
+          fail(e);
+          renderView();
+        } finally { pending--; if (!pending) refreshSoon(2000); }
       }, 300);
     });
 
@@ -906,7 +955,7 @@
     const c = ctrlById(cid);
     SU.cid = cid;
     SU.runs = clone((c.layout && c.layout.runs) || []);
-    SU.active = 0; SU.hist = []; SU.open = -1;
+    SU.active = 0; SU.hist = [];
     sSaved('');
   }
   function sSaved(text, cls) { const el = $('s-saved'); el.textContent = text; el.className = 'saved' + (cls ? ' ' + cls : ''); }
@@ -935,7 +984,7 @@
     $('s-ed').querySelectorAll('.tool [data-tool]').forEach((s) => s.classList.toggle('on', s.dataset.tool === SU.tool));
     const run = SU.runs[SU.active];
     const tip = $('s-tip'); tip.textContent = '';
-    if (SU.tool === 'draw') tip.append(h('b', '', 'Tap along the lights'), document.createTextNode(' to add points to ' + (run ? '"' + run.name + '"' : 'a new run') + '. Drag a point to move it, tap it to delete it.'));
+    if (SU.tool === 'draw') tip.append(h('b', '', 'Tap along the lights'), document.createTextNode(' to add points to ' + (run ? runLabel(SU.active).toLowerCase() : 'a new run') + '. Drag a point to move it, tap it to delete it.'));
     else tip.append(h('b', '', 'Drag points'), document.createTextNode(' to move them. Tap a point to delete it, tap a line to cut it, or drag a line to bend it.'));
     const sc = heroScene('s', $('s-ed'), { contain: true });
     sc.set(c, SU.runs);
@@ -947,23 +996,16 @@
     SU.runs.forEach((r, i) => {
       const row = h('div', 'run' + (i === SU.active ? ' on' : ''));
       const hd = h('div', 'rh');
-      const tx = h('div', 'grow'); tx.append(document.createTextNode(r.name), h('small', '', r.points.length + ' points'));
-      const dots = h('button', 'dots', '⋯');
-      hd.append(tx, dots);
-      hd.onclick = () => { SU.active = i; renderSetup(); };
-      dots.onclick = (e) => { e.stopPropagation(); SU.active = i; SU.open = SU.open === i ? -1 : i; renderSetup(); };
-      row.appendChild(hd);
-      if (SU.open === i) {
-        const rx = h('div', 'rx');
-        const nm = h('input', 'nm'); nm.value = r.name; nm.maxLength = 40; nm.placeholder = 'Name';
-        nm.onchange = () => { pushHist(); r.name = nm.value.trim() || 'Run ' + (i + 1); runsChanged(); };
-        const del = h('button', 'g-btn', 'Delete');
-        del.disabled = SU.runs.length < 2;
-        if (del.disabled) del.style.opacity = '.4';
-        del.onclick = () => { if (SU.runs.length < 2) return; pushHist(); SU.runs.splice(i, 1); SU.active = 0; SU.open = -1; runsChanged(); };
-        rx.append(nm, del);
-        row.appendChild(rx);
+      const tx = h('div', 'grow'); tx.append(document.createTextNode(runLabel(i)), h('small', '', r.points.length + ' points'));
+      hd.appendChild(tx);
+      if (SU.runs.length > 1) {
+        const del = h('button', 'dots', '🗑');
+        del.title = 'Delete run';
+        del.onclick = (e) => { e.stopPropagation(); pushHist(); SU.runs.splice(i, 1); SU.active = Math.max(0, Math.min(SU.active, SU.runs.length - 1)); runsChanged(); };
+        hd.appendChild(del);
       }
+      hd.onclick = () => { SU.active = i; renderSetup(); };
+      row.appendChild(hd);
       box.appendChild(row);
     });
     $('s-add').disabled = SU.runs.length >= 8;
@@ -988,14 +1030,17 @@
       if (pts.length) {
         const s = pts[0];
         const lb = sv('text', { x: s[0], y: s[1] - 22, 'text-anchor': 'middle', 'font-size': 18, 'font-weight': 600, fill: '#fff', stroke: '#000', 'stroke-width': 4, 'paint-order': 'stroke' });
-        lb.textContent = r.name;
+        lb.textContent = String(ri + 1);
         g.appendChild(lb);
       }
     });
   }
+  // Runs aren't named by people; the number is all that's shown and saved.
+  function runLabel(i) { return 'Run ' + (i + 1); }
   function pushHist() { SU.hist.push(clone(SU.runs)); if (SU.hist.length > 60) SU.hist.shift(); }
   const runsValid = () => SU.runs.length >= 1 && SU.runs.every((r) => r.points.length >= 2);
   function runsChanged() {
+    SU.runs.forEach((r, i) => { r.name = runLabel(i); });
     scenes.s && scenes.s.set(setupCtrl(), SU.runs);
     renderSetup();
     clearTimeout(SU.saveT);
@@ -1137,7 +1182,7 @@
     if (SU.runs.length >= 8) return;
     pushHist();
     SU.runs.push({ name: 'Run ' + (SU.runs.length + 1), points: [] });
-    SU.active = SU.runs.length - 1; SU.open = SU.active; SU.tool = 'draw';
+    SU.active = SU.runs.length - 1; SU.tool = 'draw';
     runsChanged();
   };
   $('s-upload').onclick = () => $('s-file').click();

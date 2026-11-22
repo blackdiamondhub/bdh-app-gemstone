@@ -514,6 +514,13 @@ class PluginTests(SimpleTestCase):
         self.assertEqual([p.url_name for p in spec.settings_pages], ["gemstone_settings"])
         self.assertEqual(reverse("gemstone_settings"), "/gemstone/settings/")
 
+    def test_tile_is_named_after_the_product(self):
+        # "Lights" was ambiguous next to the hub's other lighting apps.
+        from gemstone.plugin import spec
+        self.assertEqual([t.title for t in spec.tiles], ["Gemstone"])
+        html = (ROOT / "templates/gemstone/index.html").read_text(encoding="utf-8")
+        self.assertIn("{% block title %}Gemstone{% endblock %}", html)
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -606,3 +613,63 @@ class LightsSwitchTests(SimpleTestCase):
         self.assertEqual(sorted(used - setup_only - app), [])
         for shared in ("gs", "gs-msg", "gs-toast", "gs-toast-text", "gs-pop"):
             self.assertIn(shared, setup)
+
+class LayoutRunNameTests(Fresh, TestCase):
+    """Runs aren't named any more; the UI sends whatever and the server numbers them."""
+
+    def test_runs_without_a_name_save(self):
+        data = layout.save("house", [{"points": [[0, 0], [1, 0]]}, {"points": [[0, 1], [1, 1]]}])
+        self.assertEqual([r["name"] for r in data["runs"]], ["Run 1", "Run 2"])
+
+    def test_setup_has_no_run_name_field(self):
+        js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
+        self.assertNotIn("input.nm", js)
+        self.assertIsNone(re.search(r"h\(\s*'input'\s*,\s*'nm\b", js))
+        self.assertNotIn("SU.open", js)
+
+
+class SelectedCardRingTests(SimpleTestCase):
+    """Card rows clip overflow, so a highlight drawn outside a card gets cut off
+    (the Tonight favourite's border was). Rings must be drawn inside the card."""
+
+    def test_card_state_rings_stay_inside(self):
+        css = (ROOT / "static/gemstone/gemstone.css").read_text(encoding="utf-8")
+        rules = re.findall(r"([^{}]*\.g-card\.[\w-]+[^{}]*)\{([^}]*)\}", css)
+        self.assertTrue(rules)
+        for sel, body in rules:
+            body = body.replace(" ", "")
+            for shadow in re.findall(r"box-shadow:([^;]*)", body):
+                for part in shadow.split(","):
+                    if part and part != "none":
+                        self.assertIn("inset", part, sel.strip())
+            if "outline:" in body and "outline:none" not in body:
+                m = re.search(r"outline-offset:(-?\d+)", body)
+                self.assertTrue(m and int(m.group(1)) < 0, f"{sel.strip()}: outline must be inset")
+
+
+class OptimisticUiTests(SimpleTestCase):
+    """Cloud writes are spaced ~2 s apart server-side; taps must update the screen first,
+    not wait for the request (the app felt frozen)."""
+
+    def setUp(self):
+        self.js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
+
+    def body(self, name):
+        m = re.search(r"async function " + name + r"\([^)]*\)\s*\{", self.js)
+        self.assertIsNotNone(m, name)
+        depth, i = 1, m.end()
+        while depth:
+            depth += {"{": 1, "}": -1}.get(self.js[i], 0)
+            i += 1
+        return self.js[m.end():i]
+
+    def test_writes_update_the_screen_before_sending(self):
+        opt = self.body("optimistic")
+        self.assertLess(opt.index("apply()"), opt.index("await "))
+        for name in ("play", "setLights"):
+            self.assertIn("optimistic(", self.body(name), name)
+        until = self.body("setUntil")
+        self.assertLess(until.index("pending++"), until.index("await "))
+
+    def test_poll_does_not_overwrite_a_pending_write(self):
+        self.assertRegex(self.js, r"if \(pending\) return;")
