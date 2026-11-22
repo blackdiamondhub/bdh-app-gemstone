@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/autopilot/", views.autopilot_api, name="gemstone_autopilot_api"),
     path("api/design/", views.design, name="gemstone_design"),
     path("api/live/", views.live, name="gemstone_live"),
+    path("api/fav/", views.fav, name="gemstone_fav"),
     path("api/folders/", views.folders, name="gemstone_folders"),
     path("api/layout/<str:cid>/", views.layout_view, name="gemstone_layout"),
     path("api/photo/<str:cid>/", views.photo_upload, name="gemstone_photo_upload"),

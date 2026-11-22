@@ -258,7 +258,14 @@
       if (this.opts.contain || ph <= hh) oy = (hh - ph) / 2;
       else oy = clamp(hh * 0.45 - ((y0 + y1) / 2) * ph, hh - ph, 0);
       Object.assign(this, { s, pw, ph, ox, oy });
-      Object.assign(this.pic.style, { left: ox + 'px', top: oy + 'px', width: pw + 'px', height: ph + 'px' });
+      // Thumbnails zoom to the lights: every light in the box, letterboxed with the background.
+      if (this.opts.crop) {
+        const pts = [];
+        this.runs.forEach((r2) => r2.points.forEach((p) => pts.push(p)));
+        Object.assign(this, window.GemstoneCore.fitBox(pts, A, w, hh, 0.08));
+        this.blur.hidden = true;
+      }
+      Object.assign(this.pic.style, { left: this.ox + 'px', top: this.oy + 'px', width: this.pw + 'px', height: this.ph + 'px' });
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       [this.bg, this.fx].forEach((c) => { c.width = Math.max(1, Math.round(w * dpr)); c.height = Math.max(1, Math.round(hh * dpr)); });
       this.dpr = dpr;
@@ -345,10 +352,12 @@
   }
 
   // ------------------------------------------------------------ data
-  let OURS = null, LIB = null;
+  let OURS = null, LIB = null, oursP = null;
   async function loadOurs(force) {
     if (OURS && !force) return OURS;
-    OURS = await api(url('ours'));
+    // Tonight asks from several places at once: share one request.
+    if (!oursP || force) { const p = api(url('ours')).finally(() => { if (oursP === p) oursP = null; }); oursP = p; }
+    OURS = await oursP;
     return OURS;
   }
   async function loadLib() {
@@ -430,7 +439,7 @@
       b.querySelector('.g-st').textContent = on ? 'LIVE' : 'PREVIEW';
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
-    ['t-hero', 'p-hero', 'c-hero'].forEach((id) => {
+    ['t-hero', 'c-hero'].forEach((id) => {
       const el = $(id);
       el.classList.toggle('g-lv', on);
       el.classList.toggle('g-pvw', !on && (id === 'c-hero' || !!PV));
@@ -452,8 +461,7 @@
       return;
     }
     $(nameId).textContent = first ? (s.on ? ((s.pattern && s.pattern.name) || 'On') : 'Lights off') : '—';
-    $(subId).textContent = statusLine(list) + (list.length && view === 'patterns'
-      ? (lightsOn() ? ' · tap a pattern to play it' : ' · tap a pattern to preview it') : '');
+    $(subId).textContent = statusLine(list);
   }
   const playPattern = (p) => choose({ id: p.id }, p);
   const SOLIDS = [['Warm white', '#fff1e0'], ['White', '#ffffff'], ['Red', '#e3262b'], ['Orange', '#ff7a1a'], ['Gold', '#ffb800'],
@@ -471,9 +479,16 @@
     cv.width = 540; cv.height = 224; cv.style.objectFit = 'cover';
     pv.appendChild(cv); c.appendChild(pv);
     strip(cv, p, 1.3);
+    const tx = h('div', 'g-tx');
+    const fav = isFav(p);
+    const ht = h('button', 'g-ht' + (fav ? ' g-fav' : ''), fav ? '♥' : '♡');
+    ht.setAttribute('aria-label', fav ? 'Remove from favourites' : 'Add to favourites');
+    ht.setAttribute('aria-pressed', fav ? 'true' : 'false');
+    ht.onclick = (e) => { e.stopPropagation(); ht.classList.add('g-pop'); setFav(p, !isFav(p)); };
     const nm = h('div', 'nm', p.name);
     nm.appendChild(h('span', 'an', pretty(p.animation || 'motionless')));
-    c.appendChild(nm);
+    tx.append(ht, nm);
+    c.appendChild(tx);
     const first = selCtrls()[0];
     if (PV && !lightsOn() && PV.pat.id === p.id) {
       c.classList.add('g-pvw'); c.appendChild(h('span', 'pl g-pvb', 'PREVIEW'));
@@ -496,7 +511,7 @@
   }
 
   // ------------------------------------------------------------ views
-  const VIEWS = ['tonight', 'patterns', 'create'];
+  const VIEWS = ['tonight', 'create'];
   let view = SETUP ? 'setup' : 'tonight';
   const scenes = {};
   const insets = new Map();
@@ -506,10 +521,13 @@
   }
   function routeFromHash() {
     let v = (location.hash || '').replace('#', '');
+    // The old Patterns page is now the "All patterns" part of Tonight.
+    const toAll = v === 'patterns';
     if (!VIEWS.includes(v)) v = 'tonight';
     view = v;
     closePop();
     renderView();
+    if (toAll) requestAnimationFrame(scrollToAll);
   }
   if (!SETUP) window.addEventListener('hashchange', routeFromHash);
 
@@ -548,8 +566,8 @@
     renderChips();
     renderLights();
     if (view === 'tonight') renderTonight();
-    else if (view === 'patterns') renderPatterns();
     else if (view === 'create') renderCreate();
+    if (view !== 'tonight') setPinned(false);
   }
 
   // ------------------------------------------------------------ tonight
@@ -598,11 +616,16 @@
       const p = st.pattern;
       setSlider($('t-bslider'), p ? Math.round(p.brightness * 100 / 255) : 100);
     }
-    $('t-bslider').classList.toggle('dis', !anyOn);
-    $('t-bval').textContent = anyOn ? sliders.get($('t-bslider')).value + '%' : '—';
+    setSlider($('m-bslider'), sliders.get($('t-bslider')).value);
+    ['t-bslider', 'm-bslider'].forEach((id) => $(id).classList.toggle('dis', !anyOn));
+    $('t-bval').textContent = $('m-bval').textContent = anyOn ? sliders.get($('t-bslider')).value + '%' : '—';
+    heroText(list, 'm-name', 'm-sub', 'm-k');
+    renderMiniScene(first);
+    renderMiniDots();
     renderSched();
     renderEvent();
     renderFavs();
+    renderAll();
   }
 
   // Tonight's schedule: Autopilot's sunset-relative on time and its off time.
@@ -649,21 +672,10 @@
     $('t-sched-b').textContent = sub;
   }
   // Guests: off strictly after tonight's on time (or the fallback without a sunset), by GUEST_LAST.
-  const nightMin = (t) => { const [hh, mm] = t.split(':').map(Number); return hh * 60 + mm + (t < NIGHT_ENDS ? 1440 : 0); };
-  const guestAfter = (sc) => sc.on_at || S.guest_fallback || '17:00';
-  function guestOk(sc, t) { return nightMin(t) > nightMin(guestAfter(sc)) && nightMin(t) <= nightMin(GUEST_LAST); }
-  function offOptions(sc) {
-    const out = [], last = S.admin ? 27 * 60 : 22 * 60;
-    for (let m = 17 * 60; m <= last; m += 15) {
-      const t = String(Math.floor(m / 60) % 24).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-      if (S.admin || guestOk(sc, t)) out.push(t);
-    }
-    // An admin's later off time stays selectable for guests, as long as it's after the on time.
-    if (sc.off_time && !out.includes(sc.off_time)
-        && (S.admin || nightMin(sc.off_time) > nightMin(guestAfter(sc)))) out.push(sc.off_time);
-    const key = (t) => (t < NIGHT_ENDS ? '1' : '0') + t;
-    return out.sort((x, y) => (key(x) < key(y) ? -1 : 1));
-  }
+  const core = window.GemstoneCore;
+  const nightMin = core.nightMin;
+  const guestAfter = (sc) => core.guestAfter(sc, S.guest_fallback);
+  const offOptions = (sc) => core.offTimeOptions(sc, { admin: !!S.admin, guestFallback: S.guest_fallback });
   function buildSched(p) {
     const sc = S.schedule;
     const hd = h('div', 'g-schh');
@@ -702,6 +714,7 @@
       s.appendChild(o);
     });
     s.disabled = !opts.length;
+    if (!opts.length) s.appendChild(h('option', '', 'No times left before ' + fmtTime(atToday(GUEST_LAST))));
     s.onchange = () => setSchedule({ off_time: s.value });
     r2.appendChild(s);
     p.appendChild(r2);
@@ -785,26 +798,191 @@
     row.textContent = '';
     pats.forEach((p) => row.appendChild(card(p)));
   }
+  // Favourites strip: hearted patterns only.
   async function renderFavs() {
     const row = $('t-favs');
     if (!S.configured || !ctrls().length) { row.textContent = ''; return; }
-    let pats = [], title = 'Favourites';
+    let pats = [];
     try {
-      const o = await loadOurs();
-      pats = o.patterns.filter((p) => p.fav);
-      if (!pats.length) { pats = o.patterns.slice(); title = 'Ours'; }
-      if (!pats.length) { pats = (await loadLib()).slice(0, 24); title = 'From the Gemstone library'; }
+      pats = (await loadOurs()).patterns.filter((p) => p.fav);
     } catch (e) { row.textContent = ''; row.appendChild(h('div', 'empty', e.message)); return; }
     if (view !== 'tonight') return;
-    $('t-fav-h').textContent = title;
-    // Only rebuild the cards when what they show has changed.
+    if (!pats.length) {
+      if (row._key !== 'empty') { row._key = 'empty'; row.textContent = ''; row.appendChild(h('div', 'empty', 'No favourites yet — tap ♡ on any pattern below.')); }
+      return;
+    }
+    fillCards(row, pats);
+  }
+  // Only rebuild the cards when what they show has changed.
+  function cardsKey(pats) {
     const first = selCtrls()[0], fs = (first && first.state) || {};
-    const key = JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors]),
+    return JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors, isFav(p)]),
       PV && !lightsOn() ? PV.pat.id : null, fs.on && fs.pattern ? fs.pattern.id : null]);
-    if (row._key === key && row.children.length) return;
-    row._key = key;
-    row.textContent = '';
-    pats.forEach((p) => row.appendChild(card(p)));
+  }
+  function fillCards(el, pats, empty) {
+    const key = cardsKey(pats) + (empty || '');
+    if (el._key === key && el.children.length) return;
+    el._key = key;
+    // Swap in one go: an emptied grid would shrink the page and clamp its scroll for a frame.
+    if (!pats.length && empty) { el.replaceChildren(h('div', 'empty', empty)); return; }
+    el.replaceChildren(...pats.map((p) => card(p)));
+  }
+
+  // ------------------------------------------------------------ favourites (the ♡ on every card)
+  const favOver = new Map(); // id -> fav, shown until the saved list catches up
+  function isFav(p) {
+    if (favOver.has(p.id)) return favOver.get(p.id);
+    const mine = OURS && OURS.patterns.find((q) => q.id === p.id);
+    return !!(mine ? mine.fav : p.fav);
+  }
+  async function setFav(p, fav) {
+    const saved = OURS && OURS.patterns.some((q) => q.id === p.id);
+    favOver.set(p.id, fav);
+    renderView();
+    pending++;
+    try {
+      await api(url('fav'), { id: p.id, fav });
+      toast(fav ? (saved ? ['Added ', { b: p.name }, ' to favourites'] : ['Saved ', { b: p.name }, ' to your patterns ♥'])
+        : ['Removed ', { b: p.name }, ' from favourites']);
+      await loadOurs(true);
+    } catch (e) { fail(e); }
+    finally { favOver.delete(p.id); pending--; renderView(); if (!pending) refreshSoon(2000); }
+  }
+
+  // ------------------------------------------------------------ all patterns (chips + grid) and the library
+  let cat = '';
+  async function renderAll() {
+    const grid = $('t-grid'), chips = $('t-chips');
+    if (!S.configured || !ctrls().length) { grid.textContent = ''; chips.textContent = ''; $('t-count').textContent = ''; return; }
+    let o;
+    try { o = await loadOurs(); } catch (e) { grid.textContent = ''; grid.appendChild(h('div', 'empty', e.message)); return; }
+    if (view !== 'tonight') return;
+    const folders = o.folders.filter((f) => f.count || f.guest);
+    if (cat && cat !== 'solid' && !folders.some((f) => f.id === cat)) cat = '';
+    const list = [{ id: '', name: 'All', count: o.patterns.length }].concat(folders,
+      [{ id: 'solid', name: 'Solid colours', count: SOLIDS.length }]);
+    const ckey = JSON.stringify([cat, list.map((f) => [f.id, f.name, f.count, !!f.guest])]);
+    if (chips._key !== ckey) {
+      chips._key = ckey;
+      chips.textContent = '';
+      list.forEach((f) => {
+        const b = h('button', 'g-chip' + (cat === f.id ? ' on' : ''), (f.guest ? '🔒 ' : '') + f.name);
+        if (f.count != null) b.appendChild(h('em', '', String(f.count)));
+        b.onclick = () => pickCat(f.id);
+        chips.appendChild(b);
+      });
+    }
+    $('t-count').textContent = o.patterns.length + (o.patterns.length === 1 ? ' pattern' : ' patterns');
+    if (cat === 'solid') {
+      if (grid._key !== 'solid') {
+        grid._key = 'solid'; grid.textContent = '';
+        SOLIDS.forEach(([n, c]) => grid.appendChild(solidTile(n, c)));
+      }
+    } else {
+      fillCards(grid, o.patterns.filter((p) => !cat || p.folder === cat), 'Nothing here yet — make one in Create');
+    }
+    renderLib();
+  }
+  // Picking a chip keeps the header where it is when it's stuck, rather than jumping to the top.
+  function pickCat(id) {
+    cat = id;
+    renderAll();
+    const sc = $('v-tonight'), stk = $('t-stk');
+    const top = sc.getBoundingClientRect().top + (pinned ? miniH() : 0);
+    if (stk.getBoundingClientRect().top <= top + 1) scrollToAll();
+  }
+  // Scroll Tonight so the All patterns header sits at its stuck position.
+  function scrollToAll() {
+    const sc = $('v-tonight'), all = $('t-all');
+    sc.scrollTop += all.getBoundingClientRect().top - sc.getBoundingClientRect().top - miniH();
+  }
+  let libOpen = false, libErr = '';
+  async function renderLib() {
+    const box = $('t-lib');
+    $('t-libx').textContent = libOpen ? 'Hide ▴' : 'Show ▾';
+    $('t-libh').setAttribute('aria-expanded', libOpen ? 'true' : 'false');
+    box.hidden = !libOpen;
+    if (!libOpen) return;
+    let o, lib;
+    try { [o, lib] = await Promise.all([loadOurs(), loadLib()]); libErr = ''; } catch (e) {
+      libErr = e.message; box.textContent = ''; box._key = ''; box.appendChild(h('div', 'empty', libErr)); return;
+    }
+    if (view !== 'tonight' || !libOpen) return;
+    const mine = new Set(o.patterns.map((p) => p.id));
+    fillCards(box, lib.filter((p) => !mine.has(p.id)), "You've saved every library pattern");
+  }
+  if (!SETUP) {
+    $('t-libh').onclick = () => {
+      libOpen = !libOpen;
+      if (libOpen) { const box = $('t-lib'); box._key = ''; box.textContent = ''; box.appendChild(h('div', 'empty', 'Loading the library…')); }
+      renderLib();
+    };
+  }
+
+  // ------------------------------------------------------------ pinned now-playing bar
+  // Slides in when the hero scrolls away; the sticky chips header then sits below it.
+  const MINI_H = 132;
+  const miniH = () => $('g-mini').offsetHeight || MINI_H;
+  let pinned = false;
+  function setPinned(on) {
+    if (pinned === on) return;
+    pinned = on;
+    $('g-mini').classList.toggle('g-show', on);
+    $('g-mini').setAttribute('aria-hidden', on ? 'false' : 'true');
+    $('v-tonight').classList.toggle('g-pinned', on);
+  }
+  // The bar's picture: the hero's scene zoomed to fit every light (fitBox), or
+  // the card strip when there's no photo layout to show.
+  const miniPhoto = (c) => !!(c && c.layout && c.layout.photo && (c.layout.runs || []).some((r) => r.points.length));
+  function renderMiniScene(first) {
+    const ph = $('m-ph');
+    let cv = ph.querySelector('canvas.g-mstrip');
+    if (!cv) { cv = h('canvas', 'g-mstrip'); cv.width = 600; cv.height = 220; ph.appendChild(cv); }
+    const photo = miniPhoto(first);
+    cv.hidden = photo;
+    if (photo) {
+      const sc = heroScene('m', ph, { crop: true, small: true });
+      sc.set(first);
+      [sc.blur, sc.bg, sc.pic, sc.fx].forEach((e) => { e.hidden = false; });
+      sc.blur.hidden = true;
+      if (pinned) sc.fit();
+    } else if (scenes.m) {
+      [scenes.m.blur, scenes.m.bg, scenes.m.pic, scenes.m.fx].forEach((e) => { e.hidden = true; });
+    }
+  }
+  function renderMiniDots() {
+    const s = shown(selCtrls()[0]), dots = $('m-dots');
+    const cols = ((s.on && s.pattern && s.pattern.colors) || []).slice(0, 8);
+    if (dots._key === cols.join()) return;
+    dots._key = cols.join(); dots.textContent = '';
+    cols.forEach((c) => { const i = h('i'); i.style.background = c; dots.appendChild(i); });
+  }
+  if (!SETUP) {
+    const vt = $('v-tonight');
+    // A popover is placed against its button; it'd be left behind by a scroll.
+    vt.addEventListener('scroll', () => { if (!pop.hidden) closePop(); }, { passive: true });
+    if ('IntersectionObserver' in window) {
+      new IntersectionObserver((es) => es.forEach((e) => setPinned(!e.isIntersecting && view === 'tonight')),
+        { root: vt, rootMargin: '-' + (MINI_H + 8) + 'px 0px 0px 0px' }).observe($('t-hero'));
+      new IntersectionObserver((es) => es.forEach((e) => $('t-stk').classList.toggle('g-stuck', e.intersectionRatio < 1)),
+        { root: vt, threshold: [1], rootMargin: '-1px 0px 0px 0px' }).observe($('t-stk'));
+    }
+    // Drag the horizontal strips with a mouse; a drag isn't a tap.
+    root.querySelectorAll('.g-drag').forEach((el) => {
+      let down = false, x0 = 0, s0 = 0, moved = false;
+      el.addEventListener('mousedown', (e) => { down = true; moved = false; x0 = e.pageX; s0 = el.scrollLeft; });
+      window.addEventListener('mousemove', (e) => {
+        if (!down) return;
+        const dx = e.pageX - x0;
+        if (Math.abs(dx) > 5) moved = true;
+        if (moved) el.scrollLeft = s0 - dx;
+      });
+      window.addEventListener('mouseup', () => { down = false; });
+      el.addEventListener('click', (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+      el.addEventListener('wheel', (e) => {
+        if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && el.scrollWidth > el.clientWidth) { el.scrollLeft += e.deltaY; e.preventDefault(); }
+      }, { passive: false });
+    });
   }
   if (!SETUP) {
   $('t-sched').onclick = (e) => {
@@ -836,8 +1014,12 @@
     st.value = clamp(Math.round(v), 0, 100);
     el.querySelector('.f').style.width = Math.max(st.value, 4) + '%';
   }
-  if (!SETUP) makeSlider($('t-bslider'), (v) => { $('t-bval').textContent = Math.max(1, v) + '%'; bright = v; },
-    (v) => {
+  // The pinned bar's slider and the main one are the same control.
+  const onBright = (src) => (v) => {
+    $('t-bval').textContent = $('m-bval').textContent = Math.max(1, v) + '%'; bright = v;
+    ['t-bslider', 'm-bslider'].forEach((id) => { if ($(id) !== src) setSlider($(id), v); });
+  };
+  const commitBright = (v) => {
       clearTimeout(brightTimer);
       brightTimer = setTimeout(async () => {
         const pct = Math.max(1, v), list = selCtrls();
@@ -853,60 +1035,8 @@
           renderView();
         } finally { pending--; if (!pending) refreshSoon(2000); }
       }, 300);
-    });
-
-  // ------------------------------------------------------------ patterns
-  let folderFilter = '';
-  async function renderPatterns() {
-    const list = selCtrls(), first = list[0];
-    heroScene('p', $('p-hero')).set(first);
-    heroText(list, 'p-name', 'p-sub', 'p-a');
-    if (!S.configured || !ctrls().length) return;
-    const solids = $('p-solids');
-    if (!solids.childElementCount) SOLIDS.forEach(([n, c]) => solids.appendChild(solidTile(n, c)));
-    let o, lib;
-    try { [o, lib] = await Promise.all([loadOurs(), loadLib()]); } catch (e) { fail(e); return; }
-    if (view !== 'patterns') return;
-    const q = $('p-search').value.trim().toLowerCase();
-    const match = (p) => !q || p.name.toLowerCase().includes(q);
-    const favs = o.patterns.filter((p) => p.fav && match(p));
-    $('p-fav-shelf').hidden = !favs.length;
-    fill($('p-favs'), favs, 'No favourites yet');
-    const fc = $('p-folders');
-    fc.textContent = '';
-    const folders = o.folders.filter((f) => f.count || f.guest);
-    if (folderFilter && !folders.some((f) => f.id === folderFilter)) folderFilter = '';
-    [{ id: '', name: 'All' }].concat(folders).forEach((f) => {
-      const b = h('button', 'chip' + (folderFilter === f.id ? ' on' : ''), (f.guest ? '🔒 ' : '') + f.name);
-      if (f.count != null) b.appendChild(h('span', 't3', '\u00a0' + f.count));
-      b.onclick = () => { folderFilter = f.id; renderPatterns(); };
-      fc.appendChild(b);
-    });
-    fill($('p-ours'), o.patterns.filter((p) => (!folderFilter || p.folder === folderFilter) && match(p)),
-      q ? 'No matches' : 'Nothing here yet — make one in Create');
-    const box = $('p-lib');
-    box.textContent = '';
-    const cats = new Map();
-    lib.filter(match).forEach((p) => { const k = p.category || 'More'; if (!cats.has(k)) cats.set(k, []); cats.get(k).push(p); });
-    cats.forEach((pats, cat) => {
-      const sh = h('div', 'shelf');
-      const hd = h('div', 'sh'); hd.appendChild(h('h2', '', cat)); hd.appendChild(h('span', 't3', pats.length + ' patterns'));
-      const sc = h('div', 'scroller cards');
-      sh.append(hd, sc);
-      fill(sc, pats);
-      box.appendChild(sh);
-    });
-  }
-  function fill(el, pats, empty) {
-    el.textContent = '';
-    if (!pats.length && empty) { el.appendChild(h('div', 'empty', empty)); return; }
-    pats.forEach((p) => el.appendChild(card(p)));
-  }
-  let searchT = null;
-  if (!SETUP) {
-    $('p-search').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(renderPatterns, 250); });
-    $('p-golib').onclick = (e) => { e.preventDefault(); const b = $('p-lib'); if (b.firstChild) b.scrollIntoView({ behavior: 'smooth' }); };
-  }
+    };
+  if (!SETUP) ['t-bslider', 'm-bslider'].forEach((id) => makeSlider($(id), onBright($(id)), commitBright));
 
   // ------------------------------------------------------------ create
   const QUICK = [['Red', '#e3262b'], ['Green', '#1fa64a'], ['Warm white', '#fdf4bc'], ['Gold', '#ffb800'], ['Blue', '#2f6bff'],
@@ -1416,8 +1546,12 @@
         const c = selCtrls()[i + 1];
         if (b._scene && c) b._scene.draw(c.state && c.state.pattern, c.state && c.state.on, t);
       });
-    } else if (view === 'patterns') {
-      scenes.p && scenes.p.draw(sh.pattern, sh.on, t);
+      if (pinned) {
+        const pc = $('m-ph');
+        pc.classList.toggle('g-dim', !sh.on);
+        if (miniPhoto(first)) scenes.m && scenes.m.draw(sh.pattern, sh.on, t);
+        else if (sh.pattern) strip(pc.querySelector('canvas.g-mstrip'), sh.pattern, t);
+      }
     } else if (view === 'create') {
       const p = previewPattern();
       scenes.c && scenes.c.draw(p, true, t);

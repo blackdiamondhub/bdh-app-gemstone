@@ -7,10 +7,14 @@ number of controllers.
 
 ## Views
 
-- **Tonight** — what's playing on each selected controller, power, brightness, "keep on until"
-  and favourites.
-- **Patterns** — your favourites, your folders ("Ours"), the Gemstone library and solid colours.
-  Tapping a pattern plays it right away on every selected controller, with an Undo toast.
+- **Tonight** — what's playing on each selected controller, brightness, tonight's schedule and
+  the Autopilot event, then every pattern on one scrolling page: a ♥ Favourites strip, **All
+  patterns** (chips for each of your folders and for solid colours; the chips stay at the top
+  while you scroll) and, folded away at the bottom, the Gemstone library patterns you haven't
+  saved. Tap ♡ on any card to make it a favourite (a library pattern is saved into your folder as
+  it does). Tapping a card plays it without moving the page; once the big picture has scrolled
+  away a slim now-playing bar with the same Lights switch and brightness stays at the top, its
+  picture zoomed so every light is in view. `#patterns` links open Tonight at All patterns.
 - **Create** — pick colours, an animation, speed, brightness and direction. Designs save
   automatically; "Live on lights" pushes the design to the real lights while you edit.
 - **Setup** (admins, hub Settings → Gemstone → Photos & light paths) — per controller, upload a
@@ -18,7 +22,7 @@ number of controllers.
   and patterns flow through the runs in the order they were drawn. Tap a point to delete it, or a
   line to cut it in two. Without a photo the app draws a simple house with one straight run.
 
-Guests (anyone not signed in as a hub admin) get Tonight, Patterns and Create. Their designs go
+Guests (anyone not signed in as a hub admin) get Tonight and Create. Their designs go
 into a Gemstone folder called **Guest designs** with a date-coded name, they can only keep the
 lights on until 10 PM, and a daily job deletes guest designs older than 30 days. On Tonight's
 schedule a guest's off time must be strictly after tonight's on time (sunset + offset) and no

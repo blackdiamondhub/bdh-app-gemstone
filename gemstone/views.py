@@ -200,6 +200,13 @@ def design(request):
 
 @require_POST
 @_guarded
+def fav(request):
+    b = _body(request)
+    return JsonResponse(service.set_favorite(b.get("id"), b.get("fav"), admin=is_admin(request)))
+
+
+@require_POST
+@_guarded
 def live(request):
     b = _body(request)
     return JsonResponse(service.live(b.get("ids"), b.get("pattern")))
