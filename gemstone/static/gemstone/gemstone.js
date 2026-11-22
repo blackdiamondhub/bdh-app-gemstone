@@ -648,13 +648,19 @@
     else sub = 'On';
     $('t-sched-b').textContent = sub;
   }
+  // Guests: off strictly after tonight's on time (or the fallback without a sunset), by GUEST_LAST.
+  const nightMin = (t) => { const [hh, mm] = t.split(':').map(Number); return hh * 60 + mm + (t < NIGHT_ENDS ? 1440 : 0); };
+  const guestAfter = (sc) => sc.on_at || S.guest_fallback || '17:00';
+  function guestOk(sc, t) { return nightMin(t) > nightMin(guestAfter(sc)) && nightMin(t) <= nightMin(GUEST_LAST); }
   function offOptions(sc) {
     const out = [], last = S.admin ? 27 * 60 : 22 * 60;
     for (let m = 17 * 60; m <= last; m += 15) {
       const t = String(Math.floor(m / 60) % 24).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
-      out.push(t);
+      if (S.admin || guestOk(sc, t)) out.push(t);
     }
-    if (sc.off_time && !out.includes(sc.off_time)) out.push(sc.off_time);
+    // An admin's later off time stays selectable for guests, as long as it's after the on time.
+    if (sc.off_time && !out.includes(sc.off_time)
+        && (S.admin || nightMin(sc.off_time) > nightMin(guestAfter(sc)))) out.push(sc.off_time);
     const key = (t) => (t < NIGHT_ENDS ? '1' : '0') + t;
     return out.sort((x, y) => (key(x) < key(y) ? -1 : 1));
   }
@@ -688,16 +694,19 @@
     const r2 = h('div', 'g-schr');
     r2.appendChild(h('span', 'g-schl', 'Off at'));
     const s = h('select', 'g-sel');
-    offOptions(sc).forEach((t) => {
+    const opts = offOptions(sc);
+    opts.forEach((t) => {
       const o = h('option', '', fmtTime(atToday(t)) + (t < NIGHT_ENDS ? ' (after midnight)' : ''));
       o.value = t;
       if (t === sc.off_time) o.selected = true;
       s.appendChild(o);
     });
+    s.disabled = !opts.length;
     s.onchange = () => setSchedule({ off_time: s.value });
     r2.appendChild(s);
     p.appendChild(r2);
-    if (!S.admin) p.appendChild(h('div', 'g-schs', 'Guests: lights off by ' + fmtTime(atToday(GUEST_LAST)) + ' at the latest'));
+    if (!S.admin) p.appendChild(h('div', 'g-schs', 'Guests: lights off after they come on, by '
+      + fmtTime(atToday(GUEST_LAST)) + ' at the latest'));
   }
   function redrawSched() {
     if (!pop.hidden && pop.classList.contains('g-schp')) { pop.textContent = ''; buildSched(pop); }
@@ -709,9 +718,19 @@
     sc.on_offset = clamp(sc.on_offset + d, OFF_MIN, OFF_MAX);
     if (sc.on_time !== 'sunrise') sc.on_time = 'sunset';
     if (sc.sunset) { const t = atToday(sc.sunset); t.setMinutes(t.getMinutes() + sc.on_offset); sc.on_at = hhmm(t); }
+    // A guest's off time must stay after the new on time: snap to the first valid option.
+    if (!S.admin && sc.off_time && nightMin(sc.off_time) <= nightMin(guestAfter(sc))) {
+      const first = offOptions(sc)[0];
+      if (first) sc.off_time = first;
+    }
     renderSched(); redrawSched();
     clearTimeout(nudgeT);
-    nudgeT = setTimeout(() => { const prev = nudgeFrom; nudgeFrom = null; setSchedule({ on_offset: sc.on_offset }, prev); }, 700);
+    nudgeT = setTimeout(() => {
+      const prev = nudgeFrom; nudgeFrom = null;
+      const body = { on_offset: sc.on_offset };
+      if (sc.off_time !== prev.off_time) body.off_time = sc.off_time;
+      setSchedule(body, prev);
+    }, 700);
   }
   async function setSchedule(body, prev) {
     prev = prev || clone(S.schedule);
@@ -736,7 +755,10 @@
   }
 
   // Autopilot's event tonight (a holiday or a game): its patterns, folded away until asked for.
+  // Whether it's open is remembered across reloads.
+  const EV_KEY = 'gemstone.eventBar.expanded';
   let evOpen = false;
+  try { evOpen = localStorage.getItem(EV_KEY) === '1'; } catch (e) { /* private mode */ }
   function renderEvent() {
     const ev = S.tonight_event, box = $('t-ev');
     box.hidden = !ev;
@@ -789,7 +811,11 @@
     if (!S.schedule) return;
     openPop(e.currentTarget, buildSched, 'g-schp');
   };
-  $('t-evh').onclick = () => { evOpen = !evOpen; renderEvent(); };
+  $('t-evh').onclick = () => {
+    evOpen = !evOpen;
+    try { localStorage.setItem(EV_KEY, evOpen ? '1' : '0'); } catch (e) { /* private mode */ }
+    renderEvent();
+  };
   }
 
   // ------------------------------------------------------------ sliders

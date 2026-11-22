@@ -20,7 +20,10 @@ number of controllers.
 
 Guests (anyone not signed in as a hub admin) get Tonight, Patterns and Create. Their designs go
 into a Gemstone folder called **Guest designs** with a date-coded name, they can only keep the
-lights on until 10 PM, and a daily job deletes guest designs older than 30 days.
+lights on until 10 PM, and a daily job deletes guest designs older than 30 days. On Tonight's
+schedule a guest's off time must be strictly after tonight's on time (sunset + offset) and no
+later than 10 PM; without a location (no sunset) it must be after 5 PM instead. Admins aren't
+limited.
 
 ## Settings
 

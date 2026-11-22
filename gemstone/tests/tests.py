@@ -402,9 +402,9 @@ class AutopilotTests(Fresh, TestCase):
         return self.fake.ops("events_settings")[-1][0]
 
     def test_guest_off_time_is_capped_at_ten(self):
-        with self.assertRaises(service.Forbidden):
+        with self.assertRaises(service.Invalid):
             service.set_schedule(off_time="22:05", admin=False)
-        with self.assertRaises(service.Forbidden):
+        with self.assertRaises(service.Invalid):
             service.set_schedule(off_time="00:30", admin=False)
         self.assertEqual(self.fake.ops("events_settings"), [])
         service.set_schedule(off_time="22:00", admin=False)
@@ -504,6 +504,75 @@ class AutopilotTests(Fresh, TestCase):
         at = service.sunset(dt.date(2026, 6, 21), 47.61, -122.33, ZoneInfo("America/Los_Angeles"))
         self.assertEqual((at.hour, at.minute // 10), (21, 1))  # 9:11 PM in Seattle
         self.assertIsNone(service.sunset(dt.date(2026, 6, 21), 89.9, 0, ZoneInfo("UTC")))
+
+
+class GuestOffTimeTests(Fresh, TestCase):
+    """Guests pick an off time strictly after tonight's on time (sunset + offset) and by 22:00."""
+
+    def setUp(self):
+        super().setUp()
+        self.sun = timezone.make_aware(dt.datetime(2026, 11, 21, 16, 30))
+        patch.object(service, "sunset_today", lambda now=None: self.sun).start()
+        # The fake cloud's schedule is sunset −15 → on at 16:15, off at 21:00.
+
+    def off(self):
+        return self.fake.ops("events_settings")[-1][0]["schedule"]["offTime"]
+
+    def test_before_and_at_the_on_time_are_rejected(self):
+        self.assertEqual(service.schedule()["on_at"], "16:15")
+        for bad in ("16:00", "16:15"):
+            with self.assertRaisesRegex(service.Invalid, "after the lights come on at 16:15", msg=bad):
+                service.set_schedule(off_time=bad, admin=False)
+        self.assertEqual(self.fake.ops("events_settings"), [])
+
+    def test_after_the_on_time_up_to_ten_is_accepted(self):
+        service.set_schedule(off_time="16:30", admin=False)
+        self.assertEqual(self.off(), "16:30")
+        service.set_schedule(off_time="22:00", admin=False)
+        self.assertEqual(self.off(), "22:00")
+        with self.assertRaisesRegex(service.Invalid, "by 22:00 at the latest"):
+            service.set_schedule(off_time="22:05", admin=False)
+        self.assertEqual(self.off(), "22:00")
+
+    def test_admins_are_not_capped(self):
+        service.set_schedule(off_time="23:30", admin=True)
+        self.assertEqual(self.off(), "23:30")
+        service.set_schedule(off_time="16:00", admin=True)
+        self.assertEqual(self.off(), "16:00")
+
+    def test_without_a_location_guests_fall_back_to_after_five(self):
+        patch.object(service, "sunset_today", lambda now=None: None).start()
+        self.assertIsNone(service.schedule()["on_at"])
+        with self.assertRaisesRegex(service.Invalid, "after the lights come on at 17:00"):
+            service.set_schedule(off_time="17:00", admin=False)
+        service.set_schedule(off_time="17:15", admin=False)
+        self.assertEqual(self.off(), "17:15")
+
+    def test_changing_the_offset_revalidates_the_off_time(self):
+        service.set_schedule(off_time="17:00", admin=False)
+        writes = len(self.fake.ops("events_settings"))
+        # Sunset +30 → on at 17:00, which isn't before the 17:00 off time any more.
+        with self.assertRaisesRegex(service.Invalid, "before they come on at 17:00"):
+            service.set_schedule(on_offset=30, admin=False)
+        self.assertEqual(len(self.fake.ops("events_settings")), writes)
+        # Snapping the off time along with the offset (what the dropdown does) is fine.
+        out = service.set_schedule(on_offset=30, off_time="17:15", admin=False)
+        self.assertEqual((out["on_at"], out["off_time"]), ("17:00", "17:15"))
+        # Admins can move the offset regardless.
+        service.set_schedule(on_offset=60, admin=True)
+        self.assertEqual(self.fake.ops("events_settings")[-1][0]["schedule"]["onOffsetInMinutes"], 60)
+
+    def test_schedule_api_explains_the_rule(self):
+        r = self.client.post(reverse("gemstone_schedule"), {"off_time": "16:00"}, content_type="application/json")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("after the lights come on at 16:15", r.json()["error"])
+        state = self.client.get(reverse("gemstone_state")).json()
+        self.assertEqual((state["guest_last"], state["guest_fallback"]), ("22:00", "17:00"))
+
+    def test_event_bar_state_is_remembered(self):
+        js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
+        self.assertIn("'gemstone.eventBar.expanded'", js)
+        self.assertRegex(js, r"localStorage\.setItem\(EV_KEY, evOpen \? '1' : '0'\)")
 
 
 def jpeg(w=800, h=400, color=(200, 150, 100)):
@@ -653,7 +722,7 @@ class ViewTests(Fresh, TestCase):
                          {"Our designs": True, "Holidays": True, "Guest designs": False})
 
     def test_guest_schedule_api(self):
-        self.assertEqual(self.post("gemstone_schedule", {"off_time": "22:30"}).status_code, 403)
+        self.assertEqual(self.post("gemstone_schedule", {"off_time": "22:30"}).status_code, 400)
         r = self.post("gemstone_schedule", {"on_offset": -20, "off_time": "22:00"})
         self.assertEqual((r.json()["schedule"]["on_offset"], r.json()["schedule"]["off_time"]), (-20, "22:00"))
         self.assertEqual(self.post("gemstone_schedule", {"on_offset": 3}).status_code, 400)
