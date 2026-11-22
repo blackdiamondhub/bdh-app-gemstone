@@ -194,17 +194,21 @@
       this.bg = h('canvas', 'scn');
       this.pic = h('div', 'scn pic');
       this.fx = h('canvas', 'scn');
-      [this.bg, this.pic, this.fx].forEach((e) => { e.style.position = 'absolute'; e.style.pointerEvents = 'none'; });
+      // Blurred copy of the photo filling the bars beside a whole-photo view (like the screensaver).
+      this.blur = h('div', 'scn blur');
+      [this.blur, this.bg, this.pic, this.fx].forEach((e) => { e.style.position = 'absolute'; e.style.pointerEvents = 'none'; });
       this.bg.style.inset = this.fx.style.inset = '0';
       this.bg.style.width = this.fx.style.width = '100%';
       this.bg.style.height = this.fx.style.height = '100%';
-      el.prepend(this.bg, this.pic, this.fx);
+      this.blur.hidden = true;
+      el.prepend(this.blur, this.bg, this.pic, this.fx);
       this.key = '';
       this.size = '';
     }
     set(ctrl, runs) {
       const lay = (ctrl && ctrl.layout) || { photo: false, runs: [] };
       this.ctrl = ctrl;
+      this.photo = !!(ctrl && lay.photo);
       this.aspect = aspectOf(lay);
       this.runs = runs || lay.runs || [];
       const key = ctrl ? ctrl.id + '|' + (lay.photo ? lay.v : 'drawing') : 'none';
@@ -217,7 +221,9 @@
           img.alt = '';
           img.style.cssText = 'width:100%;height:100%;display:block';
           this.pic.appendChild(img);
+          this.blur.style.backgroundImage = 'url("' + photoUrl(ctrl) + '")';
         } else {
+          this.blur.style.backgroundImage = '';
           this.pic.innerHTML = '<svg viewBox="0 0 1000 500" preserveAspectRatio="none" style="width:100%;height:100%;display:block">' + HOUSE + '</svg>';
         }
       }
@@ -234,7 +240,13 @@
       let x0 = 1, y0 = 1, x1 = 0, y1 = 0;
       this.runs.forEach((r) => r.points.forEach(([x, y]) => { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }));
       if (x1 < x0) { x0 = 0; x1 = 1; y0 = 0; y1 = 1; }
-      if (this.opts.contain) s = contain;
+      // Photos are always shown whole: filling the box when it's close to the
+      // photo's shape, otherwise letterboxed over a blurred copy.
+      const r = w / hh / A;
+      const fill = this.photo && !this.opts.contain && r > 0.9 && r < 1.11;
+      this.blur.hidden = !this.photo || this.opts.contain || fill;
+      if (this.opts.contain || (this.photo && !fill)) s = contain;
+      else if (fill) s = cover;
       else {
         const bw = Math.max(x1 - x0, 0.2), bh = Math.max(y1 - y0, 0.15);
         s = Math.max(contain, Math.min(cover, Math.min(0.9 * w / (bw * A), 0.75 * hh / bh)));
@@ -253,7 +265,7 @@
       const g = this.bg.getContext('2d');
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       g.clearRect(0, 0, w, hh);
-      for (let i = 0; i < 70; i++) {
+      for (let i = 0; i < (this.photo ? 0 : 70); i++) {
         g.fillStyle = 'rgba(255,255,255,' + (0.15 + rnd(i + 3) * 0.5).toFixed(2) + ')';
         const r = 0.6 + rnd(i + 9) * 1.2;
         g.beginPath(); g.arc(rnd(i) * w, rnd(i + 99) * hh * 0.6, r, 0, 7); g.fill();
