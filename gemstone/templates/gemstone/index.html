@@ -22,11 +22,11 @@
      data-design-url="{% url 'gemstone_design' %}"
      data-live-url="{% url 'gemstone_live' %}"
      data-folders-url="{% url 'gemstone_folders' %}"
+     data-fav-url="{% url 'gemstone_fav' %}"
      data-photo-url="{% url 'gemstone_photo' 'CID' %}">
   {% csrf_token %}
   <nav class="gs-rail" id="gs-rail">
     <a class="ri" data-view="tonight" href="#tonight"><i>🌙</i>Tonight</a>
-    <a class="ri" data-view="patterns" href="#patterns"><i>✨</i>Patterns</a>
     <a class="ri" data-view="create" href="#create"><i>🎨</i>Create</a>
     <span class="sp"></span>
     <span class="who" id="gs-who">Guest</span>
@@ -34,6 +34,14 @@
 
   <main class="gs-main">
     <div class="gs-msg" id="gs-msg" hidden></div>
+    <div class="g-mini" id="g-mini" aria-hidden="true">
+      <div class="g-mph" id="m-ph"></div>
+      <div class="g-minfo"><div class="g-mk" id="m-k">Now playing</div><div class="g-mt" id="m-name">—</div>
+        <div class="g-ms" id="m-sub"></div><div class="g-mdots" id="m-dots"></div></div>
+      <button class="g-lights g-mlights" data-lights aria-pressed="false" aria-label="Lights: preview or live">💡<span class="g-st">PREVIEW</span><span class="g-sw"></span></button>
+      <div class="g-mb"><div class="lbl"><span>Brightness</span><span id="m-bval">—</span></div>
+        <div class="sl" id="m-bslider"><div class="f"></div><span class="ic">☀</span></div></div>
+    </div>
 
     <!-- Tonight -->
     <section class="pg" id="v-tonight" hidden>
@@ -57,26 +65,19 @@
         <div class="scroller cards" id="t-evrow" hidden></div>
       </div>
       <div class="t-favs">
-        <div class="sh"><h2 id="t-fav-h">Favourites</h2><a href="#patterns">See all patterns ›</a></div>
-        <div class="scroller cards" id="t-favs"></div>
+        <div class="sh"><h2 id="t-fav-h">♥ Favourites</h2><span class="g-shr">swipe → · tap ♥ to remove</span></div>
+        <div class="scroller cards g-drag" id="t-favs"></div>
       </div>
-    </section>
-
-    <!-- Patterns -->
-    <section class="pg" id="v-patterns" hidden>
-      <div class="hdr"><h1>Patterns</h1><div class="dev m" data-chips></div>
-        <label class="search"><span>🔍</span><input id="p-search" type="search" placeholder="Search patterns" autocomplete="off"></label></div>
-      <div class="hero p-hero" id="p-hero">
-        <button class="g-lights" data-lights aria-pressed="false" aria-label="Lights: preview or live">💡 Lights<span class="g-st">PREVIEW</span><span class="g-sw"></span></button>
-        <div class="stat"><div class="a" id="p-a">Now playing</div><div class="b" id="p-name">—</div><div class="c" id="p-sub"></div></div>
+      <div class="g-all" id="t-all">
+        <div class="g-stk" id="t-stk">
+          <div class="sh"><h2>All patterns</h2><span class="g-shr" id="t-count"></span></div>
+          <div class="g-chips g-drag" id="t-chips"></div>
+        </div>
+        <div class="g-grid" id="t-grid"></div>
       </div>
-      <div class="p-scroll" id="p-scroll">
-        <div class="shelf" id="p-fav-shelf"><div class="sh"><h2>★ Favourites</h2></div><div class="scroller cards" id="p-favs"></div></div>
-        <div class="shelf"><div class="sh"><h2>Ours</h2><a href="#" id="p-golib">Browse the Gemstone library ›</a></div>
-          <div class="chipr" id="p-folders"></div><div class="scroller cards" id="p-ours"></div></div>
-        <div id="p-lib"></div>
-        <div class="shelf"><div class="sh"><h2>Solid colours</h2></div><div class="scroller" id="p-solids"></div></div>
-      </div>
+      <button class="g-sec" id="t-libh" aria-expanded="false">📚 <b>Gemstone library</b>
+        <span class="g-secs">patterns from Gemstone you haven't saved yet</span><span class="grow"></span><span class="g-secx" id="t-libx">Show ▾</span></button>
+      <div class="g-grid" id="t-lib" hidden></div>
     </section>
 
     <!-- Create -->
@@ -115,5 +116,6 @@
 </div>
 
 {{ state|json_script:"gs-initial" }}
+<script src="{% static 'gemstone/gemstone-core.js' %}"></script>
 <script src="{% static 'gemstone/gemstone.js' %}"></script>
 {% endblock %}

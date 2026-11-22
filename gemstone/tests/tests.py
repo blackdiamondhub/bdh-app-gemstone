@@ -88,9 +88,9 @@ class FakeGemstone:
         self.delay = 0.0
 
     @staticmethod
-    def _fp(folder, data, created):
+    def _fp(folder, data, created, fav=False):
         return FolderPattern.from_api({"id": str(uuid.uuid4()), "folderId": folder, "patternData": data,
-                                       "createdAt": int(created.timestamp())})
+                                       "createdAt": int(created.timestamp()), "isFavorite": fav})
 
     async def _write(self, op, *args):
         self.inflight += 1
@@ -153,11 +153,11 @@ class FakeGemstone:
         self.folders_.append(folder)
         return folder
 
-    async def save_pattern(self, folder_id, pattern):
+    async def save_pattern(self, folder_id, pattern, *, is_favorite=False):
         cloud_pattern_id(pattern.id)
         await self._write("save_pattern", folder_id, pattern.id, pattern.name)
         self.fps = [fp for fp in self.fps if not (fp.folder_id == folder_id and fp.pattern.id == pattern.id)]
-        self.fps.append(self._fp(folder_id, pattern.to_api(), dt.datetime.now(UTC)))
+        self.fps.append(self._fp(folder_id, pattern.to_api(), dt.datetime.now(UTC), is_favorite))
 
     async def delete_pattern(self, folder_id, pattern_id):
         await self._write("delete_pattern", folder_id, pattern_id)
@@ -783,6 +783,59 @@ class ViewTests(Fresh, TestCase):
         for gone in ('data-view="setup"', 'id="v-setup"', 'id="s-ed"'):
             self.assertNotContains(page, gone)
 
+    def test_tonight_holds_every_pattern(self):
+        page = self.client.get(reverse("gemstone_index"))
+        for have in ('id="t-favs"', 'id="t-all"', 'id="t-stk"', 'id="t-chips"', 'id="t-grid"', 'id="t-libh"',
+                     'id="t-lib"', 'id="g-mini"', 'id="m-ph"', 'id="m-bslider"', "gemstone/gemstone-core.js"):
+            self.assertContains(page, have)
+        # The Patterns page and its search are gone.
+        for gone in ('id="v-patterns"', 'data-view="patterns"', 'id="p-search"', 'id="p-hero"'):
+            self.assertNotContains(page, gone)
+        html = page.content.decode()
+        self.assertLess(html.index("gemstone-core.js"), html.index("gemstone/gemstone.js"))
+        # The mini bar has the same Lights switch as the hero.
+        mini = html.split('id="g-mini"', 1)[1].split('id="v-tonight"', 1)[0]
+        self.assertIn("data-lights", mini)
+
+    def fav(self, pid, fav=True):
+        return self.post("gemstone_fav", {"id": pid, "fav": fav})
+
+    def ours(self):
+        return {p["id"]: p for p in self.client.get(reverse("gemstone_ours")).json()["patterns"]}
+
+    def test_heart_a_saved_pattern(self):
+        self.assertFalse(self.ours()["p-ours"]["fav"])
+        r = self.fav("p-ours")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((r.json()["fav"], r.json()["saved"], r.json()["folder"]), (True, False, "f-ours"))
+        self.assertTrue(self.ours()["p-ours"]["fav"])
+        self.fav("p-ours", False)
+        self.assertFalse(self.ours()["p-ours"]["fav"])
+        self.assertEqual([a[0] for a in self.fake.ops("save_pattern")], ["f-ours", "f-ours"])
+
+    def test_guest_heart_on_a_library_pattern_saves_it_to_guest_designs(self):
+        r = self.fav("p-lib")
+        self.assertTrue(r.json()["saved"])
+        mine = self.ours()["p-lib"]
+        self.assertTrue(mine["fav"])
+        folders = {f["id"]: f["name"] for f in self.client.get(reverse("gemstone_ours")).json()["folders"]}
+        self.assertEqual(folders[mine["folder"]], "Guest designs")
+
+    @patch("gemstone.views.is_admin", return_value=True)
+    def test_admin_heart_on_a_library_pattern_saves_it_to_the_house_folder(self, _admin):
+        self.assertEqual(self.fav("p-lib").json()["folder"], "f-ours")
+        self.assertEqual(self.ours()["p-lib"]["folder"], "f-ours")
+
+    def test_unheart_unsaved_library_pattern_writes_nothing(self):
+        r = self.fav("p-lib", False)
+        self.assertEqual((r.status_code, r.json()["fav"]), (200, False))
+        self.assertEqual(self.fake.ops("save_pattern"), [])
+
+    def test_heart_unknown_pattern(self):
+        self.assertEqual(self.fav("nope").status_code, 400)
+        self.assertEqual(self.post("gemstone_fav", {"fav": True}).status_code, 400)
+        self.assertEqual(self.client.get(reverse("gemstone_fav")).status_code, 405)
+
 
 class HomepageTests(Fresh, TestCase):
     def test_status(self):
@@ -879,7 +932,7 @@ class LightsSwitchTests(SimpleTestCase):
         self.js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
 
     def test_every_preview_picture_has_the_switch(self):
-        for hero in ("t-hero", "p-hero", "c-hero"):
+        for hero in ("t-hero", "c-hero"):
             block = self.html.split(f'id="{hero}"', 1)[1].split("</div>", 1)[0]
             self.assertIn("data-lights", block, hero)
 

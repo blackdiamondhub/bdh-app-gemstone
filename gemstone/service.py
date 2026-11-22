@@ -1050,8 +1050,7 @@ def save_design(spec, *, admin: bool, design_id: str = "", folder_id: str = "",
         if not folder_id:
             folder_id = existing["folder"] if existing else ""
         if not folder_id:
-            mine = [f for f in folders.values() if not f.gemstone_managed and f.name != GUEST_FOLDER]
-            folder_id = mine[0].folder_id if mine else new_folder("Our designs")["id"]
+            folder_id = _house_folder_id()
             folders = {f.folder_id: f for f in _folder_list()}
         folder = folders.get(folder_id)
         if folder is None or folder.gemstone_managed:
@@ -1073,6 +1072,43 @@ def save_design(spec, *, admin: bool, design_id: str = "", folder_id: str = "",
                "speed": pattern.speed, "direction": pattern.direction, "backgroundColor": 0})
     return {"id": pattern.id, "name": pattern.name, "folder": {"id": folder_id, "name": folder_name},
             "locked": not admin}
+
+
+def _house_folder_id() -> str:
+    """The first of the house's own folders, made if there isn't one."""
+    mine = [f for f in _folder_list() if not f.gemstone_managed and f.name != GUEST_FOLDER and not f.hidden]
+    return mine[0].folder_id if mine else new_folder("Our designs")["id"]
+
+
+def set_favorite(pattern_id, fav, *, admin: bool) -> dict:
+    """Heart or un-heart a pattern.
+
+    A saved pattern just has its favourite flag changed. Hearting a library
+    pattern saves a copy into the house's folder (a guest's into "Guest
+    designs") as a favourite.
+    """
+    pid = str(pattern_id or "")
+    if not _ID.match(pid):
+        raise Invalid("pattern id missing")
+    fav = bool(fav)
+    mine = next((p for p in ours()["patterns"] if p["id"] == pid), None)
+    if mine is None:
+        lib = next((p for p in library() if p["id"] == pid), None)
+        if lib is None:
+            raise Invalid("that pattern isn't in your folders or the library")
+        if not fav:
+            return {"id": pid, "fav": False, "saved": False}
+        folder_id = _house_folder_id() if admin else guest_folder_id(create=True)
+    else:
+        folder_id = mine["folder"]
+    with _known_lock:
+        raw = copy.deepcopy(_known.get(pid))
+    if raw is None:
+        raise Invalid("that pattern isn't in your folders or the library")
+    # The copy keeps the library pattern's id, so the library list can leave out what's saved.
+    pattern = _pattern_cls().from_api(raw)
+    cloud.write(lambda c: c.save_pattern(folder_id, pattern, is_favorite=fav), invalidate=("ours",))
+    return {"id": pid, "fav": fav, "folder": folder_id, "saved": mine is None, "name": pattern.name}
 
 
 def cleanup(now=None) -> int:
