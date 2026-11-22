@@ -1018,6 +1018,12 @@
       const hd = h('div', 'rh');
       const tx = h('div', 'grow'); tx.append(document.createTextNode(runLabel(i)), h('small', '', r.points.length + ' points'));
       hd.appendChild(tx);
+      // A run's points are in flow order, so reversing them flips which way patterns travel.
+      const rev = h('button', 'dots rev', '⇄');
+      rev.title = 'Reverse direction';
+      rev.disabled = r.points.length < 2;
+      rev.onclick = (e) => { e.stopPropagation(); pushHist(); r.points.reverse(); SU.active = i; runsChanged(); };
+      hd.appendChild(rev);
       if (SU.runs.length > 1) {
         const del = h('button', 'dots', '🗑');
         del.title = 'Delete run';
@@ -1050,6 +1056,10 @@
       }
     });
     (sc.dots || []).forEach(([x, y]) => g.appendChild(sv('circle', { class: 'lt', cx: x, cy: y, r: 4, fill: SETUP_LIGHT, stroke: '#0B0D10', 'stroke-width': 1 })));
+    // Arrows along each run show which way patterns flow (first point to last).
+    runPts.forEach((pts, ri) => flowArrows(pts).forEach(([x, y, a]) => g.appendChild(sv('path', {
+      class: 'flow', d: 'M-9,-8 L5,0 L-9,8', transform: 'translate(' + x + ',' + y + ') rotate(' + a + ')', fill: 'none',
+      stroke: ri === SU.active ? '#fff' : 'rgba(255,255,255,.6)', 'stroke-width': 4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'paint-order': 'stroke' }))));
     runPts.forEach((pts, ri) => {
       const act = ri === SU.active;
       pts.forEach((p) => g.appendChild(sv('circle', { cx: p[0], cy: p[1], r: act ? 11 : 8, fill: '#0B0D10',
@@ -1061,6 +1071,21 @@
         g.appendChild(lb);
       }
     });
+  }
+  // Evenly spaced [x, y, degrees] chevrons along a polyline, pointing toward its end.
+  function flowArrows(pts) {
+    const segs = []; let L = 0;
+    for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); segs.push(d); L += d; }
+    if (L < 40) return [];
+    const n = clamp(Math.round(L / 160), 1, 12), out = [];
+    let si = 0, acc = 0;
+    for (let j = 0; j < n; j++) {
+      const d = ((j + 0.5) / n) * L;
+      while (si < segs.length - 1 && acc + segs[si] < d) { acc += segs[si]; si++; }
+      const a = pts[si], b = pts[si + 1], k = segs[si] ? (d - acc) / segs[si] : 0;
+      out.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI]);
+    }
+    return out;
   }
   // Runs aren't named by people; the number is all that's shown and saved.
   function runLabel(i) { return 'Run ' + (i + 1); }
