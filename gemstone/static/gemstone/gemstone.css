@@ -169,7 +169,8 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs #c-title[contenteditable=true]{cursor:text}
 .gs #c-title[contenteditable=true]:focus{background:var(--s2)}
 .gs .c-pen{font-size:24px;color:var(--t3);cursor:pointer}
-.gs .c-new{height:60px;padding:0 22px;font-size:20px}
+.gs .c-new,.gs .c-back{height:60px;padding:0 22px;font-size:20px}
+.gs .c-back{flex:none}
 .gs .fold{height:60px;padding:0 22px;border-radius:18px;background:var(--s2);display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;white-space:nowrap;max-width:420px;overflow:hidden}
 .gs .fold small{color:var(--t3);font-weight:400}
 .gs .fold.locked{color:var(--t2);cursor:default}
@@ -192,7 +193,7 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .f{display:flex;flex-direction:column;gap:10px}
 .gs .f > label{font-size:20px;color:var(--t2)}
 .gs .f > label.lr{display:flex;justify-content:space-between}
-.gs .c-sws{gap:16px;flex-wrap:wrap;padding:12px 12px 4px}
+.gs .c-sws{gap:16px;flex-wrap:wrap;padding:12px}
 .gs .c-quick{gap:10px;flex-wrap:wrap;margin-top:6px}
 .gs .c-quick .chip{height:52px}
 .gs .swc{width:72px;height:72px;border-radius:20px;flex:none;position:relative}
@@ -204,7 +205,9 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .at{height:110px;border-radius:18px;background:var(--s2);position:relative;overflow:hidden}
 .gs .at canvas{position:absolute;left:0;right:0;top:0;width:100%;height:64px}
 .gs .at span{position:absolute;left:16px;bottom:12px;font-size:20px;font-weight:600}
-.gs .at.on{box-shadow:0 0 0 4px var(--acc)}
+/* Inside ring, like .g-card: the scrolling .c-right would clip an outer one. */
+.gs .at::after{content:'';position:absolute;inset:0;border:4px solid transparent;border-radius:inherit;pointer-events:none}
+.gs .at.on::after{border-color:var(--acc)}
 .gs .c-more{font-size:20px;color:var(--t2);margin-top:4px}
 .gs .seg{display:flex;background:var(--s2);border-radius:18px;padding:5px;gap:4px}
 .gs .seg span{flex:1;height:62px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600;color:var(--t2);cursor:pointer}

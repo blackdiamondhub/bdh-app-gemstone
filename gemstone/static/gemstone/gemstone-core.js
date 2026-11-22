@@ -49,7 +49,14 @@
     return out.sort((x, y) => (key(x) < key(y) ? -1 : 1));
   }
 
-  const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, GUEST_LAST, NIGHT_ENDS };
+  // Whether the Tonight hero has scrolled out from under the pinned bar: the same
+  // test as the IntersectionObserver (root shrunk by ``top`` px at the top).
+  function heroHidden(hero, rootRect, top) {
+    if (!hero || !rootRect || !(hero.height > 0) || !(rootRect.height > 0)) return false;
+    return hero.bottom <= rootRect.top + top || hero.top >= rootRect.bottom;
+  }
+
+  const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, heroHidden, GUEST_LAST, NIGHT_ENDS };
   root.GemstoneCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

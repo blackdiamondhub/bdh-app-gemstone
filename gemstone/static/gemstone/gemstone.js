@@ -565,7 +565,7 @@
     renderShell();
     renderChips();
     renderLights();
-    if (view === 'tonight') renderTonight();
+    if (view === 'tonight') { renderTonight(); syncPinned(); }
     else if (view === 'create') renderCreate();
     if (view !== 'tonight') setPinned(false);
   }
@@ -931,6 +931,13 @@
     $('g-mini').setAttribute('aria-hidden', on ? 'false' : 'true');
     $('v-tonight').classList.toggle('g-pinned', on);
   }
+  // The observer below only fires on a change, so coming back to Tonight already
+  // scrolled down (the hero was out of view the whole time) needs a manual check.
+  function syncPinned() {
+    if (SETUP || view !== 'tonight') return;
+    const vt = $('v-tonight'), hero = $('t-hero');
+    setPinned(window.GemstoneCore.heroHidden(hero.getBoundingClientRect(), vt.getBoundingClientRect(), MINI_H + 8));
+  }
   // The bar's picture: the hero's scene zoomed to fit every light (fitBox), or
   // the card strip when there's no photo layout to show.
   const miniPhoto = (c) => !!(c && c.layout && c.layout.photo && (c.layout.runs || []).some((r) => r.points.length));
@@ -1197,6 +1204,7 @@
   makeSlider($('c-bright'), (v) => { C.design.brightness = Math.max(1, v); $('c-bval').textContent = C.design.brightness + '%'; }, () => changed());
   $('c-dir').querySelectorAll('span').forEach((s) => { s.onclick = () => { C.design.direction = +s.dataset.d; changed(); }; });
   $('c-new').onclick = () => { newDesign(); renderCreate(); };
+  $('c-back').onclick = () => { location.hash = '#tonight'; };
   const title = $('c-title');
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
   title.addEventListener('blur', () => {
