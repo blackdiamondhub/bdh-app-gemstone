@@ -6,10 +6,13 @@
 {% block extra_head %}
 {{ block.super }}
 <link rel="stylesheet" href="{% static 'gemstone/gemstone.css' %}">
-<style>.hst-main{max-width:none}</style>
+<style>.hst-main{max-width:none}
+.gs-back{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 18px 0 12px;margin-bottom:6px;border-radius:12px;background:rgba(255,255,255,.05);color:var(--acc2);text-decoration:none;font-size:15px;font-weight:600}
+.gs-back:hover{background:rgba(91,164,230,.14)}</style>
 {% endblock %}
 
 {% block section %}
+<a class="gs-back" id="gs-back" href="#" data-bdh-nav="hub_settings_app" data-bdh-args='["gemstone"]'>‹ Gemstone settings</a>
 <div class="hst-head">
   <div>
     <h2>Photos &amp; light paths</h2>
@@ -21,7 +24,6 @@
      data-state-url="{% url 'gemstone_state' %}"
      data-layout-url="{% url 'gemstone_layout' 'CID' %}"
      data-upload-url="{% url 'gemstone_photo_upload' 'CID' %}"
-     data-blink-url="{% url 'gemstone_blink' 'CID' %}"
      data-photo-url="{% url 'gemstone_photo' 'CID' %}">
   {% csrf_token %}
   <div class="gs-msg" id="gs-msg" hidden></div>
@@ -37,12 +39,10 @@
         <div class="f"><label>Photo</label><div class="g-row s-photo"><div class="s-thumb" id="s-thumb"></div>
           <button class="g-btn grow" id="s-upload">📷 Add photo</button><button class="g-btn" id="s-rmphoto" hidden aria-label="Remove photo">✕</button></div>
           <input type="file" id="s-file" accept="image/*" hidden></div>
-        <div class="f" id="s-look-f"><label>Look</label><div class="seg" id="s-look"><span data-look="night">🌙 Night</span><span data-look="original">Original</span><span data-look="drawing">Drawing</span></div></div>
         <div class="f"><label>Light runs <span class="t3">· drawn on the picture</span> <span class="saved" id="s-saved"></span></label>
           <div class="s-runs" id="s-runs"></div>
-          <button class="g-btn s-add" id="s-add">＋ Add run</button></div>
-        <div class="f"><label>Find the start</label><button class="g-btn s-blink" id="s-blink">💡 Blink the first 10 lights</button>
-          <div class="note">ⓘ Lights the start of the selected run on the real string so you can put ▶ on the right end. Patterns then flow the same way on screen as in real life.</div></div>
+          <button class="g-btn s-add" id="s-add">＋ Add run</button>
+          <div class="note">ⓘ Patterns flow through the runs in the order you drew them.</div></div>
         <div class="note">No photo? The app shows a simple drawing with one straight run.</div>
       </div>
     </div>

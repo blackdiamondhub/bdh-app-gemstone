@@ -26,6 +26,8 @@
   const clone = (o) => JSON.parse(JSON.stringify(o));
   const mod = (a, n) => ((a % n) + n) % n;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  // Gap between preview lights, as a share of the picture's width.
+  const DOT_GAP = 1 / 70;
   function url(name, cid) {
     const u = D[name + 'Url'];
     return cid == null ? u : u.replace('CID', encodeURIComponent(cid));
@@ -70,7 +72,8 @@
   const fail = (e) => toast(e.message || String(e), true);
 
   const pop = $('gs-pop');
-  function openPop(anchor, build) {
+  function openPop(anchor, build, cls) {
+    pop.className = 'pop' + (cls ? ' ' + cls : '');
     pop.textContent = '';
     build(pop);
     pop.hidden = false;
@@ -260,28 +263,27 @@
     toPx(p) { return [this.ox + p[0] * this.pw, this.oy + p[1] * this.ph]; }
     toPic(x, y) { return [clamp((x - this.ox) / this.pw, 0, 1), clamp((y - this.oy) / this.ph, 0, 1)]; }
     layoutDots() {
+      // One dot per light, evenly spaced along the drawn paths. Spacing is a
+      // share of the picture's width so a scene looks the same at any size;
+      // the pattern flows on from one run into the next.
       const out = [];
-      const gap = this.opts.small ? 5 : 7;
+      const gap = Math.max(this.opts.small ? 5 : 9, this.pw * DOT_GAP);
       let offset = 0;
       this.runs.forEach((run) => {
         const pts = run.points.map((p) => this.toPx(p));
-        const leds = Math.max(1, run.leds | 0);
-        if (pts.length >= 2) {
-          const segs = []; let L = 0;
-          for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); segs.push(d); L += d; }
-          const n = clamp(Math.floor(L / gap), 2, leds);
-          let si = 0, acc = 0;
-          for (let j = 0; j < n; j++) {
-            const f = (j + 0.5) / n, d = f * L;
-            while (si < segs.length - 1 && acc + segs[si] < d) { acc += segs[si]; si++; }
-            const k = segs[si] ? (d - acc) / segs[si] : 0;
-            const a = pts[si], b = pts[si + 1];
-            let local = Math.min(leds - 1, Math.floor(f * leds));
-            if (run.reverse) local = leds - 1 - local;
-            out.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, offset + local]);
-          }
+        if (pts.length < 2) return;
+        const segs = []; let L = 0;
+        for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); segs.push(d); L += d; }
+        const n = Math.max(2, Math.round(L / gap));
+        let si = 0, acc = 0;
+        for (let j = 0; j < n; j++) {
+          const d = ((j + 0.5) / n) * L;
+          while (si < segs.length - 1 && acc + segs[si] < d) { acc += segs[si]; si++; }
+          const k = segs[si] ? (d - acc) / segs[si] : 0;
+          const a = pts[si], b = pts[si + 1];
+          out.push([a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, offset + j]);
         }
-        offset += leds;
+        offset += n;
       });
       return out;
     }
@@ -930,13 +932,11 @@
     else { th.style.backgroundImage = ''; th.innerHTML = '<svg viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid slice">' + HOUSE + '</svg>'; }
     $('s-upload').textContent = lay.photo ? '📷 Replace photo' : '📷 Add a photo';
     $('s-rmphoto').hidden = !lay.photo;
-    $('s-look-f').hidden = !lay.photo;
-    $('s-look').querySelectorAll('span').forEach((s) => s.classList.toggle('on', s.dataset.look === (lay.look || 'night')));
     $('s-ed').querySelectorAll('.tool [data-tool]').forEach((s) => s.classList.toggle('on', s.dataset.tool === SU.tool));
     const run = SU.runs[SU.active];
     const tip = $('s-tip'); tip.textContent = '';
-    if (SU.tool === 'draw') tip.append(h('b', '', 'Tap along the lights'), document.createTextNode(' to add points to ' + (run ? '"' + run.name + '"' : 'a new run') + '. Drag a point to move it.'));
-    else tip.append(h('b', '', 'Drag points'), document.createTextNode(' to move them; tap a line to add a bend.'));
+    if (SU.tool === 'draw') tip.append(h('b', '', 'Tap along the lights'), document.createTextNode(' to add points to ' + (run ? '"' + run.name + '"' : 'a new run') + '. Drag a point to move it, tap it to delete it.'));
+    else tip.append(h('b', '', 'Drag points'), document.createTextNode(' to move them. Tap a point to delete it, tap a line to cut it, or drag a line to bend it.'));
     const sc = heroScene('s', $('s-ed'), { contain: true });
     sc.set(c, SU.runs);
     renderRuns();
@@ -947,9 +947,9 @@
     SU.runs.forEach((r, i) => {
       const row = h('div', 'run' + (i === SU.active ? ' on' : ''));
       const hd = h('div', 'rh');
-      const tx = h('div', 'grow'); tx.append(document.createTextNode(r.name), h('small', '', r.leds + ' lights · ' + r.points.length + ' points' + (r.reverse ? ' · starts at the far end' : '')));
+      const tx = h('div', 'grow'); tx.append(document.createTextNode(r.name), h('small', '', r.points.length + ' points'));
       const dots = h('button', 'dots', '⋯');
-      hd.append(h('span', 'st', '▶'), tx, dots);
+      hd.append(tx, dots);
       hd.onclick = () => { SU.active = i; renderSetup(); };
       dots.onclick = (e) => { e.stopPropagation(); SU.active = i; SU.open = SU.open === i ? -1 : i; renderSetup(); };
       row.appendChild(hd);
@@ -957,15 +957,11 @@
         const rx = h('div', 'rx');
         const nm = h('input', 'nm'); nm.value = r.name; nm.maxLength = 40; nm.placeholder = 'Name';
         nm.onchange = () => { pushHist(); r.name = nm.value.trim() || 'Run ' + (i + 1); runsChanged(); };
-        const ld = h('input', 'ld'); ld.type = 'number'; ld.min = 1; ld.max = 5000; ld.value = r.leds;
-        ld.onchange = () => { pushHist(); r.leds = clamp(parseInt(ld.value, 10) || 1, 1, 5000); runsChanged(); };
-        const rev = h('button', 'g-btn', '⇄ Flip start');
-        rev.onclick = () => { pushHist(); r.reverse = !r.reverse; runsChanged(); };
         const del = h('button', 'g-btn', 'Delete');
         del.disabled = SU.runs.length < 2;
         if (del.disabled) del.style.opacity = '.4';
         del.onclick = () => { if (SU.runs.length < 2) return; pushHist(); SU.runs.splice(i, 1); SU.active = 0; SU.open = -1; runsChanged(); };
-        rx.append(nm, ld, h('span', 't3', 'lights'), rev, del);
+        rx.append(nm, del);
         row.appendChild(rx);
       }
       box.appendChild(row);
@@ -986,27 +982,19 @@
       if (pts.length > 1) {
         g.appendChild(sv('polyline', { points: pts.map((p) => p.join(',')).join(' '), fill: 'none',
           stroke: act ? '#5aa0ff' : 'rgba(255,255,255,.45)', 'stroke-width': act ? 4 : 3, 'stroke-dasharray': act ? '' : '8 6', 'stroke-linecap': 'round' }));
-        const a = r.reverse ? pts[pts.length - 1] : pts[0], b = r.reverse ? pts[pts.length - 2] : pts[1];
-        const ang = Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
-        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
-        g.appendChild(sv('path', { d: 'M-9,-9 L5,0 L-9,9', fill: 'none', stroke: act ? '#fff' : 'rgba(255,255,255,.6)', 'stroke-width': 4,
-          transform: 'translate(' + mx + ',' + my + ') rotate(' + ang + ')' }));
       }
       pts.forEach((p, pi) => g.appendChild(sv('circle', { cx: p[0], cy: p[1], r: act ? 11 : 8, fill: '#0B0D10',
         stroke: act ? '#5aa0ff' : 'rgba(255,255,255,.6)', 'stroke-width': 4 })));
       if (pts.length) {
-        const s = r.reverse ? pts[pts.length - 1] : pts[0];
-        g.appendChild(sv('circle', { cx: s[0], cy: s[1], r: 20, fill: '#34c759', stroke: '#0B0D10', 'stroke-width': 3 }));
-        const t = sv('text', { x: s[0] + 1, y: s[1] + 7, 'text-anchor': 'middle', 'font-size': 18, fill: '#fff' }); t.textContent = '▶';
-        g.appendChild(t);
-        const lb = sv('text', { x: s[0], y: s[1] - 30, 'text-anchor': 'middle', 'font-size': 18, 'font-weight': 600, fill: '#fff', stroke: '#000', 'stroke-width': 4, 'paint-order': 'stroke' });
+        const s = pts[0];
+        const lb = sv('text', { x: s[0], y: s[1] - 22, 'text-anchor': 'middle', 'font-size': 18, 'font-weight': 600, fill: '#fff', stroke: '#000', 'stroke-width': 4, 'paint-order': 'stroke' });
         lb.textContent = r.name;
         g.appendChild(lb);
       }
     });
   }
   function pushHist() { SU.hist.push(clone(SU.runs)); if (SU.hist.length > 60) SU.hist.shift(); }
-  const runsValid = () => SU.runs.length >= 1 && SU.runs.every((r) => r.points.length >= 2 && r.leds >= 1);
+  const runsValid = () => SU.runs.length >= 1 && SU.runs.every((r) => r.points.length >= 2);
   function runsChanged() {
     scenes.s && scenes.s.set(setupCtrl(), SU.runs);
     renderSetup();
@@ -1063,16 +1051,47 @@
     return best;
   }
   const ed = $('s-ed');
+  // A tap (no drag) on a point or on the selected run's line opens a small menu
+  // there instead of moving anything. A tap that only closes an open menu does nothing.
+  let popWasOpen = false;
+  window.addEventListener('pointerdown', () => { popWasOpen = !pop.hidden; }, true);
+  function popAt(cx, cy, build) {
+    openPop({ getBoundingClientRect: () => ({ left: cx, right: cx + 90, top: cy, bottom: cy }) }, build, 'mini');
+  }
+  function deletePoint(ri, pi) {
+    pushHist();
+    const r = SU.runs[ri];
+    r.points.splice(pi, 1);
+    if (!r.points.length) {
+      SU.runs.splice(ri, 1);
+      SU.active = clamp(SU.active > ri ? SU.active - 1 : SU.active, 0, Math.max(0, SU.runs.length - 1));
+    }
+    runsChanged();
+  }
+  function cutLine(ri, i) {
+    const r = SU.runs[ri], a = r.points.slice(0, i), b = r.points.slice(i);
+    if (a.length >= 2 && b.length >= 2 && SU.runs.length >= 8) return toast('You already have the most runs (8)');
+    pushHist();
+    const parts = [];
+    if (a.length >= 2) parts.push({ name: r.name, points: a });
+    if (b.length >= 2) parts.push({ name: parts.length ? r.name + ' 2' : r.name, points: b });
+    SU.runs.splice(ri, 1, ...parts);
+    SU.active = clamp(ri, 0, Math.max(0, SU.runs.length - 1));
+    if (!SU.runs.length) SU.active = 0;
+    runsChanged();
+  }
   ed.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.tool') || !scenes.s) return;
+    if (e.target.closest('.tool') || !scenes.s || popWasOpen) return;
     const R = ed.getBoundingClientRect(), x = e.clientX - R.left, y = e.clientY - R.top;
     const hit = hitHandle(x, y);
     if (hit) {
-      pushHist(); SU.active = hit.ri; SU.drag = hit; ed.setPointerCapture(e.pointerId); renderOverlay(); return;
+      pushHist(); SU.active = hit.ri;
+      SU.drag = Object.assign({ kind: 'point', x: e.clientX, y: e.clientY, moved: false }, hit);
+      ed.setPointerCapture(e.pointerId); renderOverlay(); return;
     }
     if (SU.tool === 'draw') {
       pushHist();
-      if (!SU.runs.length) SU.runs.push({ name: 'Run 1', points: [], leds: (setupCtrl() || {}).leds || 100, reverse: false });
+      if (!SU.runs.length) SU.runs.push({ name: 'Run 1', points: [] });
       const r = SU.runs[SU.active];
       if (r.points.length >= 200) return toast('That run has the most points it can');
       r.points.push(scenes.s.toPic(x, y));
@@ -1082,36 +1101,45 @@
       if (seg == null) return;
       pushHist();
       SU.runs[SU.active].points.splice(seg, 0, scenes.s.toPic(x, y));
-      SU.drag = { ri: SU.active, pi: seg };
+      SU.drag = { kind: 'line', ri: SU.active, pi: seg, x: e.clientX, y: e.clientY, moved: false };
       ed.setPointerCapture(e.pointerId);
       renderOverlay();
     }
   });
   ed.addEventListener('pointermove', (e) => {
-    if (!SU.drag) return;
+    const d = SU.drag;
+    if (!d) return;
+    if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 5) return;
+    d.moved = true;
     const R = ed.getBoundingClientRect();
-    SU.runs[SU.drag.ri].points[SU.drag.pi] = scenes.s.toPic(e.clientX - R.left, e.clientY - R.top);
+    SU.runs[d.ri].points[d.pi] = scenes.s.toPic(e.clientX - R.left, e.clientY - R.top);
     scenes.s.set(setupCtrl(), SU.runs);
     renderOverlay();
   });
-  const endDrag = () => { if (!SU.drag) return; SU.drag = null; runsChanged(); };
+  const endDrag = (e) => {
+    const d = SU.drag;
+    if (!d) return;
+    SU.drag = null;
+    if (d.moved) return runsChanged();
+    // A tap: put things back as they were, then offer the menu.
+    SU.runs = SU.hist.pop();
+    renderOverlay();
+    if (e.type !== 'pointerup') return;
+    if (d.kind === 'point') {
+      popAt(d.x, d.y, (p) => p.append(popItem('🗑 Delete point', '', () => { closePop(); deletePoint(d.ri, d.pi); })));
+    } else {
+      popAt(d.x, d.y, (p) => p.append(popItem('✂ Cut line here', '', () => { closePop(); cutLine(d.ri, d.pi); })));
+    }
+  };
   ed.addEventListener('pointerup', endDrag);
   ed.addEventListener('pointercancel', endDrag);
   $('s-add').onclick = () => {
     if (SU.runs.length >= 8) return;
     pushHist();
-    const used = SU.runs.reduce((a, r) => a + r.leds, 0), total = (setupCtrl() || {}).leds || 100;
-    SU.runs.push({ name: 'Run ' + (SU.runs.length + 1), points: [], leds: Math.max(1, total - used) || 50, reverse: false });
+    SU.runs.push({ name: 'Run ' + (SU.runs.length + 1), points: [] });
     SU.active = SU.runs.length - 1; SU.open = SU.active; SU.tool = 'draw';
     runsChanged();
   };
-  $('s-look').querySelectorAll('span').forEach((s) => {
-    s.onclick = async () => {
-      sSaved('Restyling\u2026', 'wait');
-      await saveLayout({ look: s.dataset.look });
-      renderSetup();
-    };
-  });
   $('s-upload').onclick = () => $('s-file').click();
   $('s-file').addEventListener('change', async (e) => {
     const f = e.target.files && e.target.files[0];
@@ -1120,7 +1148,6 @@
     await flushLayout();
     const fd = new FormData();
     fd.append('photo', f);
-    fd.append('look', (setupCtrl().layout || {}).look || 'night');
     sSaved('Uploading\u2026', 'wait');
     try {
       setupCtrl().layout = await api(url('upload', SU.cid), fd);
@@ -1133,17 +1160,6 @@
     const fd = new FormData(); fd.append('remove', '1');
     try { setupCtrl().layout = await api(url('upload', SU.cid), fd); sSaved('✓ Photo removed'); } catch (err) { fail(err); }
     renderSetup();
-  };
-  $('s-blink').onclick = async (e) => {
-    const b = e.currentTarget;
-    if (!runsValid()) return toast('Finish drawing the run first');
-    await flushLayout();
-    b.classList.add('busy');
-    try {
-      const r = await api(url('blink', SU.cid), { run: SU.active });
-      toast(['Blinking the start of ', { b: SU.runs[SU.active].name }, ' for ' + Math.round(r.seconds || 10) + ' s, then putting it back']);
-    } catch (err) { fail(err); }
-    setTimeout(() => b.classList.remove('busy'), 3000);
   };
   }
 

@@ -18,6 +18,5 @@ urlpatterns = [
     path("api/folders/", views.folders, name="gemstone_folders"),
     path("api/layout/<str:cid>/", views.layout_view, name="gemstone_layout"),
     path("api/photo/<str:cid>/", views.photo_upload, name="gemstone_photo_upload"),
-    path("api/blink/<str:cid>/", views.blink, name="gemstone_blink"),
     path("photo/<str:cid>.jpg", views.photo, name="gemstone_photo"),
 ]

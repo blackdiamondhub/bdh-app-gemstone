@@ -6,7 +6,7 @@ from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from . import cloud, layout, service, stylize, worker
+from . import cloud, layout, service, worker
 
 log = logging.getLogger(__name__)
 MAX_UPLOAD = 9 * 1024 * 1024
@@ -49,7 +49,7 @@ def _admin_only(request):
 
 
 def _controller_json(c):
-    data = layout.get(c["id"], c["leds"])
+    data = layout.get(c["id"])
     return dict(c, layout=data)
 
 
@@ -176,10 +176,10 @@ def layout_view(request, cid):
     if ctrl is None:
         raise Http404
     if request.method == "GET":
-        return JsonResponse(layout.get(cid, ctrl["leds"]))
+        return JsonResponse(layout.get(cid))
     _admin_only(request)
     b = _body(request)
-    return JsonResponse(layout.save(cid, runs=b.get("runs"), look=b.get("look"), leds=ctrl["leds"]))
+    return JsonResponse(layout.save(cid, b.get("runs")))
 
 
 @require_POST
@@ -191,16 +191,13 @@ def photo_upload(request, cid):
     if ctrl is None:
         raise Http404
     if request.POST.get("remove"):
-        return JsonResponse(layout.remove_photo(cid, ctrl["leds"]))
+        return JsonResponse(layout.remove_photo(cid))
     f = request.FILES.get("photo")
     if f is None:
         return _error("choose a photo")
     if f.size > MAX_UPLOAD:
         return _error("that photo is too big (9 MB max)")
-    look = request.POST.get("look") or None
-    if look and look not in stylize.LOOKS:
-        return _error("look is night, original or drawing")
-    return JsonResponse(layout.upload_photo(cid, f.read(), look, ctrl["leds"]))
+    return JsonResponse(layout.upload_photo(cid, f.read()))
 
 
 @require_GET
@@ -216,15 +213,3 @@ def photo(request, cid):
     return resp
 
 
-@require_POST
-@_guarded
-def blink(request, cid):
-    _admin_only(request)
-    layout.check_cid(cid)
-    run = _body(request).get("run", 0)
-    try:
-        run = int(run)
-    except (TypeError, ValueError):
-        return _error("bad run")
-    service.blink(cid, layout.start_offset(cid, run))
-    return JsonResponse({"ok": True, "seconds": service.BLINK_SECONDS})

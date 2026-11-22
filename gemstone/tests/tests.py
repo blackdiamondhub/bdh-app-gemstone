@@ -131,7 +131,6 @@ class Fresh:
 
         patch.object(cloud, "client_factory", factory).start()
         patch.object(cloud, "WRITE_GAP", 0.0).start()
-        patch.object(service, "BLINK_SECONDS", 0.0).start()
         self.addCleanup(patch.stopall)
         cloud.reset()
         self.addCleanup(cloud.reset)
@@ -315,22 +314,6 @@ class ServiceTests(Fresh, TestCase):
         service.power(["house"], False, admin=True)
         self.assertEqual(service.until()["ids"], ["tub"])
 
-    def test_blink_lights_the_start_then_restores(self):
-        service.blink("house", 195, wait=True)
-        (cid, lights), = self.fake.ops("impulse")
-        self.assertEqual(cid, "house")
-        from pygemstone import encode_lights
-        self.assertEqual(lights, encode_lights(range(195, 200)))
-        self.assertEqual(self.fake.ops("play"), [("house", "Warm white")])
-        self.assertTrue(self.fake.states["house"]["onState"])
-
-    def test_blink_restores_off_controller_to_off(self):
-        service.blink("tub", 0, wait=True)
-        self.assertEqual(self.fake.ops("impulse")[0][0], "tub")
-        self.assertEqual([w[0] for w in self.fake.writes], ["impulse", "play", "on"])
-        self.assertFalse(self.fake.states["tub"]["onState"])
-
-
 class WorkerTests(Fresh, TestCase):
     def test_cleanup_runs_daily(self):
         self.fake.folders_.append(Folder.from_api({"folderId": "f-guest", "name": "Guest designs"}))
@@ -359,54 +342,65 @@ def jpeg(w=800, h=400, color=(200, 150, 100)):
 
 class LayoutTests(Fresh, TestCase):
     def test_default_is_one_straight_run(self):
-        data = layout.get("house", 200)
+        data = layout.get("house")
         self.assertFalse(data["photo"])
-        self.assertEqual(len(data["runs"]), 1)
-        self.assertEqual(data["runs"][0]["leds"], 200)
+        self.assertEqual(list(data["runs"][0]), ["name", "points"])
 
     def test_save_and_validate_runs(self):
-        runs = [{"name": "Front", "points": [[0, 0.5], [0.5, 0.2], [1, 0.5]], "leds": 150},
+        runs = [{"name": "Front", "points": [[0, 0.5], [0.5, 0.2], [1, 0.5]]},
                 {"name": "", "points": [[0.1, 0.9], [0.9, 0.9]], "leds": 50, "reverse": True}]
-        data = layout.save("house", runs=runs, leds=200)
-        self.assertEqual(data["runs"][1]["name"], "Run 2")
-        self.assertTrue(data["runs"][1]["reverse"])
+        data = layout.save("house", runs)
+        self.assertEqual(data["runs"][1], {"name": "Run 2", "points": [[0.1, 0.9], [0.9, 0.9]]})
         self.assertEqual(layout.get("house")["runs"][0]["points"][1], [0.5, 0.2])
-        self.assertEqual(layout.start_offset("house", 1), 150)
-        bad = [[], [{"points": [[0, 0]], "leds": 10}], [{"points": [[0, 0], [2, 0]], "leds": 10}],
-               [{"points": [[0, 0], [1, 0]], "leds": 0}], [{"points": [[0, 0], [1, 0]]}] * 9]
+        bad = [[], [{"points": [[0, 0]]}], [{"points": [[0, 0], [2, 0]]}], [{"points": "x"}],
+               [{"points": [[0, 0], [1, 0]]}] * 9, [{"points": [[0, 0]] * 201}]]
         for runs in bad:
             with self.assertRaises(layout.Invalid):
                 layout.clean_runs(runs)
         with self.assertRaises(layout.Invalid):
             layout.check_cid("../etc")
-        with self.assertRaises(layout.Invalid):
-            layout.save("house", look="sepia")
 
-    def test_photo_upload_stylizes_and_restyles(self):
-        data = layout.upload_photo("house", jpeg(2400, 1200), "night", 200)
+    def test_photo_is_kept_as_uploaded(self):
+        data = layout.upload_photo("house", jpeg(2400, 1200))
         self.assertTrue(data["photo"])
         self.assertEqual(data["aspect"], 2.0)
-        night = Image.open(io.BytesIO(layout.photo_bytes("house")))
-        self.assertEqual(night.size, (stylize.MAX_WIDTH, 800))
-        r, g, b = night.convert("RGB").resize((1, 1)).getpixel((0, 0))
-        self.assertLess(r + g + b, 200 + 150 + 100)  # darker than the photo
-        grey = stylize.night(Image.new("RGB", (200, 100), (120, 120, 120)))
-        r, g, b = grey.getpixel((100, 50))
-        self.assertGreater(b, r)  # blue night tint
+        img = Image.open(io.BytesIO(layout.photo_bytes("house"))).convert("RGB")
+        self.assertEqual(img.size, (stylize.MAX_WIDTH, 800))
+        r, g, b = img.resize((1, 1)).getpixel((0, 0))
+        self.assertLess(abs(r - 200) + abs(g - 150) + abs(b - 100), 12)  # same colours, no restyle
         v = data["v"]
-        data = layout.save("house", look="original", leds=200)
-        self.assertEqual(data["v"], v + 1)
+        self.assertEqual(layout.upload_photo("house", jpeg())["v"], v + 1)
+        data = layout.remove_photo("house")
+        self.assertFalse(data["photo"])
+        self.assertNotIn("aspect", data)
+        self.assertIsNone(layout.photo_bytes("house"))
+
+    def test_old_restyled_layout_goes_back_to_the_original_photo(self):
+        from bdh_sdk.storage import app_media, app_state
+        from django.core.files.base import ContentFile
+        media = app_media("gemstone")
+        media.save("photos/house.jpg", ContentFile(jpeg(color=(10, 10, 60))))  # the old "night" render
+        media.save("photos/house.orig.jpg", ContentFile(jpeg(color=(200, 150, 100))))
+        app_state("gemstone").set("layout:house", {
+            "photo": True, "v": 3, "look": "night", "aspect": 2.0,
+            "runs": [{"name": "Eave", "points": [[0, 0], [1, 0]], "leds": 150, "reverse": True}]})
+        data = layout.get("house")
+        self.assertEqual(data, {"photo": True, "v": 4, "aspect": 2.0,
+                                "runs": [{"name": "Eave", "points": [[0, 0], [1, 0]]}]})
         r, g, b = Image.open(io.BytesIO(layout.photo_bytes("house"))).convert("RGB").resize((1, 1)).getpixel((0, 0))
         self.assertGreater(r, b)
-        data = layout.remove_photo("house", 200)
-        self.assertFalse(data["photo"])
-        self.assertIsNone(layout.photo_bytes("house"))
+        self.assertFalse(media.exists("photos/house.orig.jpg"))
+        self.assertEqual(layout.get("house")["v"], 4)  # migrated once, not on every read
+
+    def test_old_original_look_just_drops_the_old_keys(self):
+        from bdh_sdk.storage import app_state
+        app_state("gemstone").set("layout:tub", {"photo": False, "v": 1, "look": "original",
+                                                 "runs": [{"name": "A", "points": [[0, 0], [1, 1]], "leds": 9}]})
+        self.assertEqual(layout.get("tub"), {"photo": False, "v": 1, "runs": [{"name": "A", "points": [[0, 0], [1, 1]]}]})
 
     def test_bad_photo_is_rejected(self):
         with self.assertRaises(layout.Invalid):
             layout.upload_photo("house", b"not an image")
-        for look in stylize.LOOKS:
-            self.assertEqual(stylize.render(stylize.load(jpeg(100, 50)), look).size, (100, 50))
 
 
 class ViewTests(Fresh, TestCase):
@@ -431,7 +425,7 @@ class ViewTests(Fresh, TestCase):
         self.assertFalse(data["admin"])
         house = data["controllers"][0]
         self.assertEqual((house["leds"], house["state"]["on"]), (200, True))
-        self.assertEqual(house["layout"]["runs"][0]["leds"], 200)
+        self.assertNotIn("leds", house["layout"]["runs"][0])
 
     def test_play_and_errors(self):
         r = self.post("gemstone_play", {"ids": ["house", "tub"], "pattern": {"kind": "solid", "color": "#00ff00"}})
@@ -442,7 +436,6 @@ class ViewTests(Fresh, TestCase):
     def test_guests_cannot_use_admin_endpoints(self):
         self.assertEqual(self.post("gemstone_folders", {"name": "X"}).status_code, 403)
         self.assertEqual(self.post("gemstone_layout", {"runs": []}, "house").status_code, 403)
-        self.assertEqual(self.post("gemstone_blink", {}, "house").status_code, 403)
         r = self.client.post(reverse("gemstone_photo_upload", args=["house"]), {"photo": io.BytesIO(jpeg())})
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.client.get(reverse("gemstone_layout", args=["house"])).status_code, 200)
@@ -465,19 +458,19 @@ class ViewTests(Fresh, TestCase):
         r = self.post("gemstone_design", {"pattern": {"colors": ["#ff0000"]}, "folder": "f-ours", "name": "Mine"})
         self.assertEqual((r.json()["folder"]["name"], r.json()["name"]), ("Our designs", "Mine"))
         self.assertEqual(self.post("gemstone_folders", {"name": "Party"}).json()["name"], "Party")
-        runs = [{"points": [[0, 0], [1, 0]], "leds": 120}, {"points": [[0, 1], [1, 1]], "leds": 80}]
-        self.assertEqual(self.post("gemstone_layout", {"runs": runs}, "house").json()["runs"][1]["leds"], 80)
+        runs = [{"points": [[0, 0], [1, 0]]}, {"points": [[0, 1], [1, 1]], "leds": 80}]
+        self.assertEqual(self.post("gemstone_layout", {"runs": runs}, "house").json()["runs"][1],
+                         {"name": "Run 2", "points": [[0, 1], [1, 1]]})
         self.assertEqual(self.post("gemstone_layout", {"runs": [{"points": [[0, 0]]}]}, "house").status_code, 400)
-        r = self.client.post(reverse("gemstone_photo_upload", args=["house"]),
-                             {"photo": io.BytesIO(jpeg()), "look": "drawing"})
-        self.assertEqual(r.json()["look"], "drawing")
+        r = self.client.post(reverse("gemstone_photo_upload", args=["house"]), {"photo": io.BytesIO(jpeg())})
+        self.assertTrue(r.json()["photo"])
+        self.assertNotIn("look", r.json())
         photo = self.client.get(reverse("gemstone_photo", args=["house"]))
         self.assertEqual(photo["Content-Type"], "image/jpeg")
         self.assertEqual(self.client.get(reverse("gemstone_photo", args=["tub"])).status_code, 404)
-        with patch.object(service, "blink") as blink:
-            self.assertEqual(self.post("gemstone_blink", {"run": 1}, "house").status_code, 200)
-        blink.assert_called_once_with("house", 120)
-        self.assertEqual(self.post("gemstone_blink", {"run": 5}, "house").status_code, 400)
+        r = self.client.post(reverse("gemstone_photo_upload", args=["house"]), {"remove": "1"})
+        self.assertFalse(r.json()["photo"])
+        self.assertEqual(self.client.post("/gemstone/api/blink/house/").status_code, 404)
 
     def test_settings_page_is_admin_only(self):
         self.assertEqual(self.client.get(reverse("gemstone_settings")).status_code, 404)
@@ -486,6 +479,10 @@ class ViewTests(Fresh, TestCase):
         self.assertContains(page, 'data-mode="setup"')
         self.assertContains(page, 'id="s-ed"')
         self.assertContains(page, 'id="gs-initial"')
+        # A way back to the app's other hub settings (the hub draws no nav round this page).
+        self.assertContains(page, 'data-bdh-nav="hub_settings_app" data-bdh-args=\'["gemstone"]\'')
+        for gone in ('s-look', 's-blink', 'Flip start'):
+            self.assertNotContains(page, gone)
 
     def test_setup_is_not_in_the_app(self):
         with patch("gemstone.views.is_admin", return_value=True):
