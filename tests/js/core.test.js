@@ -95,3 +95,15 @@ test('offTimeOptions: admins get 5 PM to 3 AM in night order', () => {
   assert.equal(opts.length, 41);
   assert.ok(opts.indexOf('23:45') < opts.indexOf('00:00'));
 });
+
+test('heroHidden matches the pinned bar observer', () => {
+  const root = { top: 0, bottom: 1000, height: 1000 };
+  const hero = (top, h) => ({ top, bottom: top + h, height: h });
+  assert.equal(core.heroHidden(hero(28, 500), root, 140), false, 'at the top');
+  assert.equal(core.heroHidden(hero(-300, 500), root, 140), false, 'still showing under the bar');
+  assert.equal(core.heroHidden(hero(-360, 500), root, 140), true, 'tucked under the bar');
+  assert.equal(core.heroHidden(hero(-4000, 500), root, 140), true, 'scrolled far down');
+  // A hidden view lays out at zero size; that must never pin.
+  assert.equal(core.heroHidden({ top: 0, bottom: 0, height: 0 }, root, 140), false);
+  assert.equal(core.heroHidden(hero(-4000, 500), { top: 0, bottom: 0, height: 0 }, 140), false);
+});
