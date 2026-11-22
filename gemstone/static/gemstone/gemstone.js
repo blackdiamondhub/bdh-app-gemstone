@@ -27,7 +27,7 @@
   const mod = (a, n) => ((a % n) + n) % n;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   // Gap between preview lights, as a share of the picture's width.
-  const DOT_GAP = 1 / 70;
+  const DOT_GAP = 1 / 45;
   function url(name, cid) {
     const u = D[name + 'Url'];
     return cid == null ? u : u.replace('CID', encodeURIComponent(cid));
