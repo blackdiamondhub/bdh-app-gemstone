@@ -30,6 +30,21 @@ def pat(pid, name, colors=(0xFF,), animation="motionless"):
             "brightness": 255, "speed": 128, "direction": 0, "backgroundColor": 0}
 
 
+# Fixture ids the fake cloud "already has"; anything the app sends must be a UUID.
+FIXTURE_IDS = {"p-warm", "p-blue", "p-ours", "p-lib"}
+
+
+def cloud_pattern_id(pid):
+    """The real cloud 400s with "Pattern Id is not a valid UUID" otherwise."""
+    if pid in FIXTURE_IDS:
+        return
+    try:
+        uuid.UUID(str(pid))
+    except ValueError:
+        from pygemstone import GemstoneValueError
+        raise GemstoneValueError("Invalid Pattern property: Value for Pattern Id is not a valid UUID.")
+
+
 class FakeGemstone:
     """An in-memory Gemstone cloud with two controllers."""
 
@@ -94,6 +109,7 @@ class FakeGemstone:
         self.states[cid]["onState"] = on
 
     async def play_pattern(self, cid, pattern):
+        cloud_pattern_id(pattern.id)
         await self._write("play", cid, pattern.name)
         self.states[cid].update(onState=True, pattern=dict(pattern.to_api()))
 
@@ -104,6 +120,7 @@ class FakeGemstone:
         return folder
 
     async def save_pattern(self, folder_id, pattern):
+        cloud_pattern_id(pattern.id)
         await self._write("save_pattern", folder_id, pattern.id, pattern.name)
         self.fps = [fp for fp in self.fps if not (fp.folder_id == folder_id and fp.pattern.id == pattern.id)]
         self.fps.append(self._fp(folder_id, pattern.to_api(), dt.datetime.now(UTC)))
@@ -433,6 +450,31 @@ class ViewTests(Fresh, TestCase):
         self.assertEqual(self.post("gemstone_play", {"ids": ["x"], "pattern": {}}).status_code, 400)
         self.assertEqual(self.client.get(reverse("gemstone_play")).status_code, 405)
 
+    def test_every_write_sends_ids_the_cloud_accepts(self):
+        """Editing a design failed on every change: live/solid pattern ids weren't UUIDs."""
+        names = [a for _, a in service.ANIMATIONS] + list(service.MORE_ANIMATIONS)
+        for anim in names:
+            spec = {"colors": ["#ff0000", "#00ff00"], "animation": anim}
+            r = self.post("gemstone_live", {"ids": ["house", "tub"], "pattern": spec})
+            self.assertEqual(r.status_code, 200, (anim, r.content))
+        for ref in ({"kind": "solid", "color": "#00ff00", "name": "Green"},
+                    {"kind": "solid", "color": service.WARM_HEX},
+                    {"kind": "spec", "spec": {"colors": ["#0000ff"], "animation": "chase"}}):
+            r = self.post("gemstone_play", {"ids": ["house"], "pattern": ref})
+            self.assertEqual(r.status_code, 200, (ref, r.content))
+        r = self.post("gemstone_design", {"pattern": {"colors": ["#ff0000"], "animation": "starry"}})
+        self.assertEqual(r.status_code, 200, r.content)
+        again = self.post("gemstone_design", {"id": r.json()["id"], "pattern": {"colors": ["#00ff00"]}})
+        self.assertEqual(again.status_code, 200, again.content)
+
+    def test_solid_ids_match_the_ui(self):
+        """gemstone.js marks the playing swatch by comparing against solidId(hex)."""
+        sid = service.solid_id("#A0B1C2")
+        self.assertEqual(sid, str(uuid.UUID(sid)))
+        js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
+        prefix = re.search(r"const solidId = \(hex\) => '([0-9a-f-]+)'", js).group(1)
+        self.assertEqual(prefix + "a0b1c2", sid)
+
     def test_guests_cannot_use_admin_endpoints(self):
         self.assertEqual(self.post("gemstone_folders", {"name": "X"}).status_code, 403)
         self.assertEqual(self.post("gemstone_layout", {"runs": []}, "house").status_code, 403)
@@ -642,9 +684,48 @@ class SelectedCardRingTests(SimpleTestCase):
                 for part in shadow.split(","):
                     if part and part != "none":
                         self.assertIn("inset", part, sel.strip())
-            if "outline:" in body and "outline:none" not in body:
-                m = re.search(r"outline-offset:(-?\d+)", body)
-                self.assertTrue(m and int(m.group(1)) < 0, f"{sel.strip()}: outline must be inset")
+            # The preview canvas paints over an outline/inset shadow, so rings were
+            # half hidden. They must be drawn by the ::after overlay above the content.
+            self.assertNotRegex(body, r"outline:(?!none)", sel.strip())
+
+    def test_ring_overlay_sits_above_the_preview(self):
+        css = (ROOT / "static/gemstone/gemstone.css").read_text(encoding="utf-8").replace(" ", "")
+        m = re.search(r"\.gs\.g-card::after\{([^}]*)\}", css)
+        self.assertTrue(m, "card ring overlay missing")
+        body = m.group(1)
+        for need in ("position:absolute", "inset:0", "pointer-events:none", "border:4px"):
+            self.assertIn(need, body)
+        self.assertGreater(int(re.search(r"z-index:(\d+)", body).group(1)), 1)
+        for state in ("on", "g-pvw"):
+            self.assertRegex(css, r"\.g-card\." + state + r"::after\{border-color:")
+
+
+class PreviewDrawingTests(SimpleTestCase):
+    def setUp(self):
+        self.js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
+
+    def test_card_strips_are_straight(self):
+        body = self.js[self.js.index("function strip("):self.js.index("// ---", self.js.index("function strip("))]
+        self.assertNotIn("arc ?", body)
+        self.assertNotIn("Math.sin", body)
+
+    def test_setup_lights_are_static_and_uniform(self):
+        """Setup showed the live pattern: some lights blinked, others were dim or under the line."""
+        frame = self.js[self.js.index("function frame()"):self.js.index("setInterval(frame")]
+        setup = frame[frame.index("view === 'setup'"):]
+        self.assertNotIn(".draw(", setup)
+        ov = self.js[self.js.index("function renderOverlay()"):self.js.index("function runLabel(")]
+        self.assertIn("fill: SETUP_LIGHT", ov)
+        self.assertNotIn("colAt", ov)
+        # lights after run lines, handles after lights
+        self.assertLess(ov.index("'polyline'"), ov.index("SETUP_LIGHT"))
+        self.assertLess(ov.index("SETUP_LIGHT"), ov.index("r: act ? 11 : 8"))
+
+    def test_live_pushes_never_overlap(self):
+        """Every animation tap fired its own live request; they piled up behind the cloud's pacing."""
+        body = self.js[self.js.index("async function pushLive()"):self.js.index("function renderCreateHeader")]
+        self.assertIn("if (C.pushing) { C.pushAgain = true; return; }", body)
+        self.assertIn("finally", body)
 
 
 class OptimisticUiTests(SimpleTestCase):

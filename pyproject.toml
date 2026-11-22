@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bdh-app-gemstone"
-version = "0.1.0b7"
+version = "0.1.0b8"
 description = "Black Diamond Hub app: play, design and set up Gemstone Lights"
 readme = "README.md"
 license = { text = "MIT" }

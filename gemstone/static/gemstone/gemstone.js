@@ -318,13 +318,12 @@
   }
 
   // Small LED-strip previews for cards and animation tiles.
-  function strip(canvas, p, t, arc) {
+  function strip(canvas, p, t) {
     const w = canvas.width, hh = canvas.height, g = canvas.getContext('2d');
     g.clearRect(0, 0, w, hh);
-    const n = arc ? 15 : 13;
+    const n = 13, y = hh * 0.5;
     for (let j = 0; j < n; j++) {
-      const f = (j + 0.5) / n, x = w * (0.06 + 0.88 * f);
-      const y = arc ? hh * (0.62 - 0.3 * Math.sin(f * Math.PI)) : hh * 0.5;
+      const x = w * (0.06 + 0.88 * (j + 0.5) / n);
       const [c, a] = colAt(j * 3, p, t);
       g.fillStyle = rgba(c, 0.3 * a);
       g.beginPath(); g.arc(x, y, hh * 0.11, 0, 7); g.fill();
@@ -447,7 +446,9 @@
   const playPattern = (p) => choose({ id: p.id }, p);
   const SOLIDS = [['Warm white', '#fff1e0'], ['White', '#ffffff'], ['Red', '#e3262b'], ['Orange', '#ff7a1a'], ['Gold', '#ffb800'],
     ['Green', '#1fa64a'], ['Teal', '#14b8a6'], ['Blue', '#2f6bff'], ['Purple', '#8b3dff'], ['Pink', '#ff4fa3']];
-  const solidPat = (name, hex) => ({ id: 'bdh-solid-' + hex.slice(1), name, colors: [hex], animation: 'motionless', brightness: 255, speed: 0, direction: 0 });
+  // Must match service.solid_id: the cloud only takes UUID pattern ids.
+  const solidId = (hex) => 'bd450000-0000-4000-8000-000000' + hex.slice(1).toLowerCase();
+  const solidPat = (name, hex) => ({ id: solidId(hex), name, colors: [hex], animation: 'motionless', brightness: 255, speed: 0, direction: 0 });
 
   // ------------------------------------------------------------ cards
   function card(p, opts) {
@@ -457,7 +458,7 @@
     const pv = h('div', 'pv'); const cv = h('canvas');
     cv.width = 540; cv.height = 224; cv.style.objectFit = 'cover';
     pv.appendChild(cv); c.appendChild(pv);
-    strip(cv, p, 1.3, true);
+    strip(cv, p, 1.3);
     const nm = h('div', 'nm', p.name);
     nm.appendChild(h('span', 'an', pretty(p.animation || 'motionless')));
     c.appendChild(nm);
@@ -825,8 +826,15 @@
       if (C.again) { C.again = false; saveDesign(); }
     }
   }
+  // One live push at a time; edits made while one is in flight send just the latest spec after it.
   async function pushLive() {
-    try { await api(url('live'), { ids: sel, pattern: spec() }); } catch (e) { fail(e); }
+    if (C.pushing) { C.pushAgain = true; return; }
+    C.pushing = true;
+    try { await api(url('live'), { ids: sel.slice(), pattern: spec() }); } catch (e) { fail(e); }
+    finally {
+      C.pushing = false;
+      if (C.pushAgain) { C.pushAgain = false; if (lightsOn()) pushLive(); }
+    }
   }
   function renderCreateHeader() {
     const t = $('c-title');
@@ -1010,6 +1018,7 @@
     });
     $('s-add').disabled = SU.runs.length >= 8;
   }
+  const SETUP_LIGHT = '#5aa0ff';
   function renderOverlay() {
     const ed = $('s-ed'), sc = scenes.s;
     if (!sc || !ed.offsetParent) return;
@@ -1018,14 +1027,20 @@
     const g = SU.svg;
     g.setAttribute('width', sc.w); g.setAttribute('height', sc.h);
     g.textContent = '';
-    SU.runs.forEach((r, ri) => {
+    // Setup shows where the lights are, not a pattern: every light is the same steady blue,
+    // drawn above the run lines so none hide behind them; handles go on top.
+    const runPts = SU.runs.map((r) => r.points.map((p) => sc.toPx(p)));
+    runPts.forEach((pts, ri) => {
       const act = ri === SU.active;
-      const pts = r.points.map((p) => sc.toPx(p));
       if (pts.length > 1) {
         g.appendChild(sv('polyline', { points: pts.map((p) => p.join(',')).join(' '), fill: 'none',
-          stroke: act ? '#5aa0ff' : 'rgba(255,255,255,.45)', 'stroke-width': act ? 4 : 3, 'stroke-dasharray': act ? '' : '8 6', 'stroke-linecap': 'round' }));
+          stroke: act ? 'rgba(90,160,255,.5)' : 'rgba(255,255,255,.3)', 'stroke-width': act ? 3 : 2, 'stroke-dasharray': act ? '' : '8 6', 'stroke-linecap': 'round' }));
       }
-      pts.forEach((p, pi) => g.appendChild(sv('circle', { cx: p[0], cy: p[1], r: act ? 11 : 8, fill: '#0B0D10',
+    });
+    (sc.dots || []).forEach(([x, y]) => g.appendChild(sv('circle', { class: 'lt', cx: x, cy: y, r: 4, fill: SETUP_LIGHT, stroke: '#0B0D10', 'stroke-width': 1 })));
+    runPts.forEach((pts, ri) => {
+      const act = ri === SU.active;
+      pts.forEach((p) => g.appendChild(sv('circle', { cx: p[0], cy: p[1], r: act ? 11 : 8, fill: '#0B0D10',
         stroke: act ? '#5aa0ff' : 'rgba(255,255,255,.6)', 'stroke-width': 4 })));
       if (pts.length) {
         const s = pts[0];
@@ -1226,10 +1241,10 @@
     } else if (view === 'create') {
       const p = previewPattern();
       scenes.c && scenes.c.draw(p, true, t);
-      $('c-anims').querySelectorAll('canvas').forEach((cv) => strip(cv, Object.assign({}, p, { animation: cv.dataset.anim }), t, false));
+      $('c-anims').querySelectorAll('canvas').forEach((cv) => strip(cv, Object.assign({}, p, { animation: cv.dataset.anim }), t));
     } else if (view === 'setup' && scenes.s) {
-      const c = setupCtrl(), cst = (c && c.state) || {};
-      scenes.s.draw(cst.on && cst.pattern ? cst.pattern : { colors: ['#fff1e0'], animation: 'motionless', brightness: 200 }, true, t);
+      // No pattern here: the lights are drawn static in the overlay (renderOverlay).
+      if (scenes.s.el.offsetParent) scenes.s.fit();
       if (scenes.s.size && SU.svgSize !== scenes.s.size) { SU.svgSize = scenes.s.size; renderOverlay(); }
     }
     if (view === 'tonight' && tick % 20 === 0) renderTimeline(selCtrls());
