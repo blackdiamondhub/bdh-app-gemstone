@@ -4,6 +4,7 @@ from . import views
 
 urlpatterns = [
     path("", views.index, name="gemstone_index"),
+    path("settings/", views.settings_page, name="gemstone_settings"),
     path("api/state/", views.state, name="gemstone_state"),
     path("api/library/", views.library, name="gemstone_library"),
     path("api/ours/", views.ours, name="gemstone_ours"),

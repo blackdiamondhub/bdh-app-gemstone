@@ -77,6 +77,14 @@ def index(request):
 
 
 @require_GET
+def settings_page(request):
+    # Settings → Gemstone → Photos & light paths. Admins only, like the rest of Settings.
+    if not is_admin(request):
+        raise Http404
+    return render(request, "gemstone/settings.html", {"active": "gemstone", "state": _state(request)})
+
+
+@require_GET
 def state(request):
     return JsonResponse(_state(request))
 

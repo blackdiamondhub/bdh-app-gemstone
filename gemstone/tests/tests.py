@@ -479,6 +479,20 @@ class ViewTests(Fresh, TestCase):
         blink.assert_called_once_with("house", 120)
         self.assertEqual(self.post("gemstone_blink", {"run": 5}, "house").status_code, 400)
 
+    def test_settings_page_is_admin_only(self):
+        self.assertEqual(self.client.get(reverse("gemstone_settings")).status_code, 404)
+        with patch("gemstone.views.is_admin", return_value=True):
+            page = self.client.get(reverse("gemstone_settings"))
+        self.assertContains(page, 'data-mode="setup"')
+        self.assertContains(page, 'id="s-ed"')
+        self.assertContains(page, 'id="gs-initial"')
+
+    def test_setup_is_not_in_the_app(self):
+        with patch("gemstone.views.is_admin", return_value=True):
+            page = self.client.get(reverse("gemstone_index"))
+        for gone in ('data-view="setup"', 'id="v-setup"', 'id="s-ed"'):
+            self.assertNotContains(page, gone)
+
 
 class HomepageTests(Fresh, TestCase):
     def test_status(self):
@@ -499,6 +513,9 @@ class PluginTests(SimpleTestCase):
         from gemstone.plugin import spec
         self.assertEqual(spec.network, "outbound")
         self.assertEqual({s.key for s in spec.settings}, {"gemstone_email", "gemstone_password"})
+        # Photos & light paths live under the hub's Settings → Gemstone.
+        self.assertEqual([p.url_name for p in spec.settings_pages], ["gemstone_settings"])
+        self.assertEqual(reverse("gemstone_settings"), "/gemstone/settings/")
 
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -580,6 +597,15 @@ class LightsSwitchTests(SimpleTestCase):
         self.assertIn("const playPattern = (p) => choose(", self.js)
 
     def test_every_element_the_script_looks_up_exists(self):
-        ids = set(re.findall(r'id="([^"{]+)"', self.html)) | set(re.findall(r'json_script:"([\w-]+)"', self.html))
-        missing = sorted({i for i in re.findall(r"\$\('([\w-]+)'\)", self.js) if i not in ids})
-        self.assertEqual(missing, [])
+        # The script runs on two pages: the app (index.html) and Settings → Photos & light paths
+        # (settings.html, setup ids s-*). Each id must exist on the page that uses it.
+        def ids(html):
+            return set(re.findall(r'id="([^"{]+)"', html)) | set(re.findall(r'json_script:"([\w-]+)"', html))
+        app = ids(self.html)
+        setup = ids((ROOT / "templates/gemstone/settings.html").read_text(encoding="utf-8"))
+        used = set(re.findall(r"\$\('([\w-]+)'\)", self.js))
+        setup_only = {i for i in used if i.startswith("s-") or i == "v-setup"}
+        self.assertEqual(sorted(setup_only - setup), [])
+        self.assertEqual(sorted(used - setup_only - app), [])
+        for shared in ("gs", "gs-msg", "gs-toast", "gs-toast-text", "gs-pop"):
+            self.assertIn(shared, setup)

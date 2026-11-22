@@ -211,6 +211,40 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .note{font-size:19px;color:var(--t2);display:flex;gap:10px;align-items:flex-start}
 .gs .s-acct b{color:#3ddc84}
 
+/* setup inside hub Settings (an iframe page that grows with its content) */
+.gs.gs-set{position:relative;top:auto;left:auto;right:auto;bottom:auto;display:block;overflow:visible;background:none;font-size:18px;z-index:auto}
+.gs-set .s-pg{display:flex;flex-direction:column;gap:16px}
+.gs-set .gs-msg{position:static;margin-bottom:16px;padding:20px 26px;font-size:18px;box-shadow:none}
+.gs-set .hdr{min-height:0}
+.gs-set .dev .chip-c{padding:10px 18px;font-size:17px}
+.gs-set .s-acct{font-size:16px}
+.gs-set .s-body{gap:22px;align-items:flex-start}
+.gs-set .ed{flex:1 1 0;width:auto;height:clamp(300px,34vw,640px);border-radius:22px}
+.gs-set .tip{font-size:16px;padding:10px 16px;left:16px;top:16px;max-width:min(560px,70%)}
+.gs-set .tool{bottom:16px}
+.gs-set .tool span{height:52px;padding:0 18px;font-size:17px}
+.gs-set .s-side{flex:none;width:440px;gap:18px;overflow:visible}
+.gs-set .f > label{font-size:16px}
+.gs-set .g-btn{height:56px;padding:0 20px;font-size:17px;white-space:normal;text-align:center;line-height:1.15}
+.gs-set .s-thumb{width:120px;height:72px;border-radius:12px}
+.gs-set .seg span{height:50px;font-size:16px}
+.gs-set .run{font-size:18px;border-radius:16px}
+.gs-set .run .rh{min-height:64px;padding:0 16px}
+.gs-set .run small{font-size:15px}
+.gs-set .run input{height:48px;font-size:17px}
+.gs-set .run input.ld{width:100px}
+.gs-set .run .g-btn{height:48px;font-size:16px;padding:0 14px}
+.gs-set .note{font-size:15px}
+.gs-set .g-toast{position:fixed;bottom:24px;font-size:18px;min-height:64px}
+@media (max-width:1100px){
+  .gs-set .s-body{flex-direction:column;align-items:stretch}
+  .gs-set .ed{flex:none;width:100%;height:auto;aspect-ratio:2/1;min-height:220px}
+  .gs-set .s-side{width:auto}
+}
+@media (max-width:700px){
+  .gs-set .tip{display:none}
+}
+
 /* phone */
 @media (max-width:700px){
   .gs{font-size:18px;flex-direction:column-reverse}

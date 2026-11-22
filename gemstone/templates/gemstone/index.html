@@ -21,16 +21,12 @@
      data-design-url="{% url 'gemstone_design' %}"
      data-live-url="{% url 'gemstone_live' %}"
      data-folders-url="{% url 'gemstone_folders' %}"
-     data-layout-url="{% url 'gemstone_layout' 'CID' %}"
-     data-upload-url="{% url 'gemstone_photo_upload' 'CID' %}"
-     data-blink-url="{% url 'gemstone_blink' 'CID' %}"
      data-photo-url="{% url 'gemstone_photo' 'CID' %}">
   {% csrf_token %}
   <nav class="gs-rail" id="gs-rail">
     <a class="ri" data-view="tonight" href="#tonight"><i>🌙</i>Tonight</a>
     <a class="ri" data-view="patterns" href="#patterns"><i>✨</i>Patterns</a>
     <a class="ri" data-view="create" href="#create"><i>🎨</i>Create</a>
-    <a class="ri gs-admin" data-view="setup" href="#setup" hidden><i>⚙️</i>Setup</a>
     <span class="sp"></span>
     <span class="who" id="gs-who">Guest</span>
   </nav>
@@ -106,30 +102,6 @@
       </div>
     </section>
 
-    <!-- Setup (admin) -->
-    <section class="pg s-pg" id="v-setup" hidden>
-      <div class="hdr"><h1>Light setup</h1><div class="dev" id="s-ctrls"></div><span class="grow"></span>
-        <span class="saved s-acct" id="s-acct"></span></div>
-      <div class="g-row s-body">
-        <div class="ed" id="s-ed">
-          <div class="tip" id="s-tip"></div>
-          <div class="tool"><span data-tool="draw" class="on">✏️ Draw</span><span data-tool="move">✋ Move</span><span id="s-undo">↶ Undo</span></div>
-        </div>
-        <div class="s-side">
-          <div class="f"><label>Photo</label><div class="g-row s-photo"><div class="s-thumb" id="s-thumb"></div>
-            <button class="g-btn grow" id="s-upload">📷 Add photo</button><button class="g-btn" id="s-rmphoto" hidden>✕</button></div>
-            <input type="file" id="s-file" accept="image/*" hidden></div>
-          <div class="f" id="s-look-f"><label>Look</label><div class="seg" id="s-look"><span data-look="night">🌙 Night</span><span data-look="original">Original</span><span data-look="drawing">Drawing</span></div></div>
-          <div class="f"><label>Light runs <span class="t3">· drawn on the picture</span> <span class="saved" id="s-saved"></span></label>
-            <div class="s-runs" id="s-runs"></div>
-            <button class="g-btn s-add" id="s-add">＋ Add run</button></div>
-          <div class="f"><label>Find the start</label><button class="g-btn s-blink" id="s-blink">💡 Blink the first 10 lights</button>
-            <div class="note">ⓘ Lights the start of the selected run on the real string so you can put ▶ on the right end. Patterns then flow the same way on screen as on the house.</div></div>
-          <span class="grow"></span>
-          <div class="note">No photo? The app uses a simple house drawing with one straight run.</div>
-        </div>
-      </div>
-    </section>
   </main>
 
   <div class="pop" id="gs-pop" hidden></div>

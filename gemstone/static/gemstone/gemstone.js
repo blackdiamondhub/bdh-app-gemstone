@@ -8,6 +8,8 @@
   const $ = (id) => document.getElementById(id);
   const SVGNS = 'http://www.w3.org/2000/svg';
   let S = JSON.parse($('gs-initial').textContent || '{}');
+  // The same script drives the app and its Settings → Light setup page, which only has the setup elements.
+  const SETUP = D.mode === 'setup';
 
   // ------------------------------------------------------------ helpers
   function h(tag, cls, text) {
@@ -398,7 +400,7 @@
       el.classList.toggle('g-pvw', !on && (id === 'c-hero' || !!PV));
     });
   }
-  root.querySelectorAll('[data-lights]').forEach((b) => { b.onclick = () => setLights(!lightsOn()); });
+  if (!SETUP) root.querySelectorAll('[data-lights]').forEach((b) => { b.onclick = () => setLights(!lightsOn()); });
   // What the Tonight / Patterns pictures show: the preview while the lights are off, else the real lights.
   function shown(c) {
     if (PV && !lightsOn()) return { pattern: PV.pat, on: true, preview: true };
@@ -456,8 +458,8 @@
   }
 
   // ------------------------------------------------------------ views
-  const VIEWS = ['tonight', 'patterns', 'create', 'setup'];
-  let view = 'tonight';
+  const VIEWS = ['tonight', 'patterns', 'create'];
+  let view = SETUP ? 'setup' : 'tonight';
   const scenes = {};
   function heroScene(key, el, opts) {
     if (!scenes[key]) scenes[key] = new Scene(el, opts);
@@ -466,20 +468,21 @@
   function routeFromHash() {
     let v = (location.hash || '').replace('#', '');
     if (!VIEWS.includes(v)) v = 'tonight';
-    if (v === 'setup' && !S.admin) v = 'tonight';
     view = v;
     closePop();
     renderView();
   }
-  window.addEventListener('hashchange', routeFromHash);
+  if (!SETUP) window.addEventListener('hashchange', routeFromHash);
 
   function renderShell() {
-    root.querySelectorAll('.gs-admin').forEach((e) => { e.hidden = !S.admin; });
     const who = $('gs-who');
     who.textContent = S.admin ? 'Admin' : 'Guest';
     who.classList.toggle('admin', !!S.admin);
     root.querySelectorAll('.ri').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
     VIEWS.forEach((v) => { $('v-' + v).hidden = v !== view; });
+    renderMsg();
+  }
+  function renderMsg() {
     const msg = $('gs-msg');
     msg.textContent = '';
     if (!S.configured) {
@@ -496,13 +499,18 @@
 
   function renderView() {
     fixSel();
+    if (SETUP) {
+      renderMsg();
+      $('v-setup').hidden = !S.configured || !ctrls().length;
+      renderSetup();
+      return;
+    }
     renderShell();
     renderChips();
     renderLights();
     if (view === 'tonight') renderTonight();
     else if (view === 'patterns') renderPatterns();
     else if (view === 'create') renderCreate();
-    else if (view === 'setup') renderSetup();
   }
 
   // ------------------------------------------------------------ tonight
@@ -578,6 +586,7 @@
     row.textContent = '';
     pats.slice(0, 12).forEach((p) => row.appendChild(card(p)));
   }
+  if (!SETUP) {
   $('t-pwr').onclick = () => setLights(!lightsOn());
   $('t-until').setAttribute('data-pop', '');
   $('t-until').onclick = (e) => {
@@ -597,6 +606,7 @@
       if (S.admin) { p.appendChild(h('hr')); p.appendChild(popItem('No limit', cur ? '' : 'on', () => setUntil(''))); }
     });
   };
+  }
   async function setUntil(at) {
     closePop();
     try {
@@ -625,7 +635,7 @@
     st.value = clamp(Math.round(v), 0, 100);
     el.querySelector('.f').style.width = Math.max(st.value, 4) + '%';
   }
-  makeSlider($('t-bslider'), (v) => { $('t-bval').textContent = Math.max(1, v) + '%'; bright = v; },
+  if (!SETUP) makeSlider($('t-bslider'), (v) => { $('t-bval').textContent = Math.max(1, v) + '%'; bright = v; },
     (v) => {
       clearTimeout(brightTimer);
       brightTimer = setTimeout(async () => {
@@ -686,8 +696,10 @@
     pats.forEach((p) => el.appendChild(card(p)));
   }
   let searchT = null;
-  $('p-search').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(renderPatterns, 250); });
-  $('p-golib').onclick = (e) => { e.preventDefault(); const b = $('p-lib'); if (b.firstChild) b.scrollIntoView({ behavior: 'smooth' }); };
+  if (!SETUP) {
+    $('p-search').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(renderPatterns, 250); });
+    $('p-golib').onclick = (e) => { e.preventDefault(); const b = $('p-lib'); if (b.firstChild) b.scrollIntoView({ behavior: 'smooth' }); };
+  }
 
   // ------------------------------------------------------------ create
   const QUICK = [['Red', '#e3262b'], ['Green', '#1fa64a'], ['Warm white', '#fdf4bc'], ['Gold', '#ffb800'], ['Blue', '#2f6bff'],
@@ -697,7 +709,7 @@
   function newDesign() {
     C.design = { colors: ['#e3262b', '#1fa64a', '#fdf4bc', '#ffb800'], animation: 'starry', brightness: 100, speed: 128, direction: 0, name: 'Untitled design' };
     C.id = ''; C.folder = null; C.selIdx = 0; C.dirty = false; C.guestName = '';
-    savedText('');
+    if (!SETUP) savedText('');
   }
   newDesign();
   const spec = () => ({ colors: C.design.colors.slice(), animation: C.design.animation, brightness: C.design.brightness,
@@ -834,6 +846,7 @@
     $('c-dirnote').textContent = still ? '· not used by ' + pretty(C.design.animation) : '';
     $('c-dir').querySelectorAll('span').forEach((s) => s.classList.toggle('on', +s.dataset.d === C.design.direction));
   }
+  if (!SETUP) {
   $('c-picker').addEventListener('input', (e) => { C.design.colors[C.selIdx] = e.target.value; changed(); });
   $('c-more').onclick = (e) => { e.preventDefault(); C.more = !C.more; renderCreate(); };
   makeSlider($('c-speed'), (v) => { C.design.speed = Math.round(v * 255 / 100); }, () => changed());
@@ -876,6 +889,7 @@
       p.appendChild(nb);
     });
   };
+  }
   function pickFolder(f) {
     closePop();
     C.folder = { id: f.id, name: f.name };
@@ -914,7 +928,7 @@
     const th = $('s-thumb'); th.textContent = '';
     if (lay.photo) th.style.backgroundImage = 'url("' + photoUrl(c) + '")';
     else { th.style.backgroundImage = ''; th.innerHTML = '<svg viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid slice">' + HOUSE + '</svg>'; }
-    $('s-upload').textContent = lay.photo ? '📷 Replace photo' : '📷 Add a photo of the house';
+    $('s-upload').textContent = lay.photo ? '📷 Replace photo' : '📷 Add a photo';
     $('s-rmphoto').hidden = !lay.photo;
     $('s-look-f').hidden = !lay.photo;
     $('s-look').querySelectorAll('span').forEach((s) => s.classList.toggle('on', s.dataset.look === (lay.look || 'night')));
@@ -1019,6 +1033,7 @@
     if (SU.saveT) await saveLayout();
     else if (SU.saving) await SU.saving;
   }
+  if (SETUP) {
   $('s-ed').querySelectorAll('.tool [data-tool]').forEach((s) => { s.onclick = () => { SU.tool = s.dataset.tool; renderSetup(); }; });
   $('s-undo').onclick = () => {
     if (!SU.hist.length) return toast('Nothing to undo');
@@ -1130,6 +1145,7 @@
     } catch (err) { fail(err); }
     setTimeout(() => b.classList.remove('busy'), 3000);
   };
+  }
 
   // ------------------------------------------------------------ animation loop
   let tick = 0;
@@ -1164,5 +1180,6 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshState(); });
 
   fixSel();
-  routeFromHash();
+  if (SETUP) renderView();
+  else routeFromHash();
 })();
