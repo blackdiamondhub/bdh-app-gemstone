@@ -25,6 +25,8 @@ GUEST_FOLDER = "Guest designs"
 GUEST_KEEP_DAYS = 30
 #: Latest time of day a guest can keep the lights on until.
 GUEST_LAST = dt.time(22, 0)
+#: A guest's off time must be after tonight's on time; with no location/sunset, after this.
+GUEST_FALLBACK = dt.time(17, 0)
 #: After the guest limit has passed, how long a guest can still turn lights on for.
 GUEST_GRACE = dt.timedelta(minutes=15)
 DEFAULT_LEDS = 100
@@ -824,14 +826,46 @@ def _check_offset(value) -> int:
     return n
 
 
-def _check_off_time(value, *, admin: bool) -> str:
+def _night_minutes(t: dt.time) -> int:
+    """Minutes into the evening's night: times before ``NIGHT_ENDS`` are after midnight."""
+    m = t.hour * 60 + t.minute
+    return m + 24 * 60 if t < NIGHT_ENDS else m
+
+
+def _on_at(w, now=None) -> dt.time | None:
+    """When window ``w`` turns the lights on tonight, or None if that can't be worked out."""
+    on_time = getattr(w, "on_time", None) or "sunset"
+    if on_time == "sunset":
+        sun = sunset_today(now)
+        if sun is None:
+            return None
+        return (sun + dt.timedelta(minutes=w.on_offset_minutes or 0)).time().replace(second=0, microsecond=0)
+    if on_time == "sunrise":
+        return None
+    try:
+        return _hhmm(on_time)
+    except Invalid:
+        return None
+
+
+def guest_off_after(w, now=None) -> dt.time:
+    """A guest's off time must be strictly after this: tonight's on time, or ``GUEST_FALLBACK``."""
+    return _on_at(w, now) or GUEST_FALLBACK
+
+
+def _check_off_time(value, *, admin: bool, after: dt.time | None = None) -> str:
     t = _hhmm(value)
-    if not admin and (t > GUEST_LAST or t < NIGHT_ENDS):
-        raise Forbidden(f"Guests can have the lights go off by {GUEST_LAST.strftime('%H:%M')} at the latest")
+    if not admin:
+        last = GUEST_LAST.strftime("%H:%M")
+        if _night_minutes(t) > _night_minutes(GUEST_LAST):
+            raise Invalid(f"Guests can have the lights go off by {last} at the latest")
+        if after is not None and _night_minutes(t) <= _night_minutes(after):
+            raise Invalid(f"Pick an off time after the lights come on at {after.strftime('%H:%M')} "
+                          f"(and by {last})")
     return t.strftime("%H:%M")
 
 
-def _apply_schedule(s, *, on_offset=None, off_time=None, admin: bool) -> bool:
+def _apply_schedule(s, *, on_offset=None, off_time=None, admin: bool, now=None) -> bool:
     """Change ``s.schedule`` in place. True if anything changed."""
     from pygemstone.models import EventsScheduleWindow
 
@@ -843,6 +877,7 @@ def _apply_schedule(s, *, on_offset=None, off_time=None, admin: bool) -> bool:
             w.on_time = "sunset"  # only sunset-relative on times are offered here
         changed |= n != w.on_offset_minutes or s.schedule is None
         w.on_offset_minutes = n
+    after = None if admin else guest_off_after(w, now)
     if off_time is not None:
         same = False
         try:
@@ -850,9 +885,18 @@ def _apply_schedule(s, *, on_offset=None, off_time=None, admin: bool) -> bool:
         except Invalid:
             pass
         if not same:  # a guest can leave an admin's later time alone
-            w.off_time = _check_off_time(off_time, admin=admin)
+            w.off_time = _check_off_time(off_time, admin=admin, after=after)
             w.off_offset_minutes = 0
             changed = True
+    if after is not None:
+        # Whatever a guest changed, the lights must still go off after they come on.
+        try:
+            current = _hhmm(w.off_time)
+        except Invalid:
+            current = None
+        if current is not None and _night_minutes(current) <= _night_minutes(after):
+            raise Invalid(f"The lights would go off at {current.strftime('%H:%M')}, before they come on at "
+                          f"{after.strftime('%H:%M')} — pick a later off time")
     s.schedule = w
     return changed
 
@@ -862,12 +906,13 @@ def _save(s) -> None:
 
 
 def set_schedule(*, on_offset=None, off_time=None, dark_tonight=None, admin: bool, now=None) -> dict:
-    """Change tonight's schedule. Anyone can; guests can't push the off time past ``GUEST_LAST``."""
+    """Change tonight's schedule. Anyone can; a guest's off time must be after tonight's on time
+    and no later than ``GUEST_LAST``."""
     if on_offset is None and off_time is None and dark_tonight is None:
         raise Invalid("nothing to change")
     if on_offset is not None or off_time is not None:
         s = copy.deepcopy(_settings(ttl=0))
-        if _apply_schedule(s, on_offset=on_offset, off_time=off_time, admin=admin):
+        if _apply_schedule(s, on_offset=on_offset, off_time=off_time, admin=admin, now=now):
             _save(s)
     if dark_tonight is not None:
         set_dark(bool(dark_tonight), now)

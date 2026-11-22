@@ -56,7 +56,8 @@ def _controller_json(c):
 def _state(request):
     admin = is_admin(request)
     out = {"admin": admin, "configured": cloud.configured(), "guest_folder": service.GUEST_FOLDER,
-           "guest_last": service.GUEST_LAST.strftime("%H:%M"), "keep_days": service.GUEST_KEEP_DAYS,
+           "guest_last": service.GUEST_LAST.strftime("%H:%M"),
+           "guest_fallback": service.GUEST_FALLBACK.strftime("%H:%M"), "keep_days": service.GUEST_KEEP_DAYS,
            "animations": [{"label": a, "name": n} for a, n in service.ANIMATIONS],
            "more_animations": list(service.MORE_ANIMATIONS), "controllers": [], "until": None}
     if not out["configured"]:
