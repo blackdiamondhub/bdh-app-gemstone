@@ -727,6 +727,17 @@ class PreviewDrawingTests(SimpleTestCase):
         self.assertIn("if (C.pushing) { C.pushAgain = true; return; }", body)
         self.assertIn("finally", body)
 
+    def test_photos_are_shown_whole(self):
+        """Tonight zoomed into the light runs, so a hot tub photo showed only a sliver."""
+        fit = self.js[self.js.index("    fit() {"):self.js.index("    toPx(p)")]
+        # A photo is either letterboxed (contain) or filled only when the shapes nearly match.
+        self.assertIn("if (this.opts.contain || (this.photo && !fill)) s = contain;", fit)
+        self.assertIn("r > 0.9 && r < 1.11", fit)
+        self.assertLess(fit.index("s = contain;"), fit.index("0.9 * w / (bw * A)"))
+        # The bars beside a letterboxed photo are a blurred copy, like the screensaver.
+        self.assertIn("this.blur.hidden = !this.photo || this.opts.contain || fill;", fit)
+        css = (ROOT / "static/gemstone/gemstone.css").read_text(encoding="utf-8")
+        self.assertRegex(css, r"\.scn\.blur\{[^}]*filter:blur\(")
 
 class OptimisticUiTests(SimpleTestCase):
     """Cloud writes are spaced ~2 s apart server-side; taps must update the screen first,

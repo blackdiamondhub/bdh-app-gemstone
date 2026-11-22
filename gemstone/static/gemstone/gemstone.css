@@ -42,6 +42,8 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 /* hero */
 .gs .hero{position:relative;height:500px;flex:none;border-radius:28px;overflow:hidden;background:radial-gradient(ellipse at 50% 120%,#1a1f2b 0%,#0d1016 55%,#07080b 100%)}
 .gs .hero > svg.scene{position:absolute;top:0;left:0}
+.gs .scn.blur{inset:-8%;background:center/cover no-repeat;filter:blur(40px) brightness(.6) saturate(1.1)}
+.gs .scn.blur[hidden]{display:none}
 .gs .stat{position:absolute;left:44px;bottom:36px;right:44px;pointer-events:none;text-shadow:0 2px 12px #000}
 .gs .stat .a{font-size:20px;color:var(--t2);text-transform:uppercase;letter-spacing:.08em}
 .gs .stat .b{font-size:48px;font-weight:600;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
