@@ -95,7 +95,8 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .g-card .an{display:block;font-size:17px;color:var(--t3);font-weight:400}
 .gs .g-card .more{position:absolute;right:8px;bottom:8px;width:56px;height:56px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:28px;color:var(--t2)}
 /* Ring drawn inside the card so a row's overflow can never clip it. */
-.gs .g-card.on{outline:4px solid var(--acc);outline-offset:-4px}
+.gs .g-card::after{content:'';position:absolute;inset:0;border:4px solid transparent;border-radius:inherit;pointer-events:none;z-index:3}
+.gs .g-card.on::after{border-color:var(--acc)}
 .gs .g-card .pl{position:absolute;top:10px;left:10px;font-size:15px;font-weight:700;background:var(--acc);color:#fff;padding:4px 10px;border-radius:10px}
 .gs .g-card.busy{opacity:.6}
 .gs .empty{font-size:20px;color:var(--t3);padding:20px 4px}
@@ -139,7 +140,7 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .g-lights.on .g-sw:after{left:30px;background:#fff}
 .gs .hero.g-pvw{box-shadow:0 0 0 4px #ffb800}
 .gs .hero.g-lv{box-shadow:0 0 0 4px #2fbf5a}
-.gs .g-card.g-pvw{outline:4px solid #ffb800;outline-offset:-4px}
+.gs .g-card.g-pvw::after{border-color:#ffb800}
 .gs .g-card .pl.g-pvb{background:#ffb800;color:#1a1300}
 .gs .stat .sw{display:flex;gap:8px;margin-top:12px}
 .gs .stat .sw i{width:30px;height:30px;border-radius:50%;display:block}

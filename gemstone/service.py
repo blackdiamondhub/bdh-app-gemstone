@@ -148,9 +148,18 @@ def pattern_from_spec(spec: dict, *, name: str = "", pattern_id: str = ""):
     )
 
 
+# The cloud only accepts UUID pattern ids. Solid colours get a fixed one built from
+# the colour so the UI (solidId in gemstone.js) can tell which swatch is playing.
+SOLID_ID_PREFIX = "bd450000-0000-4000-8000-000000"
+
+
+def solid_id(color: str) -> str:
+    return SOLID_ID_PREFIX + int_to_hex(hex_to_int(color))[1:]
+
+
 def solid_pattern(color: str, name: str = ""):
     return _pattern_cls()(
-        id=f"bdh-solid-{color.lstrip('#').lower()}",
+        id=solid_id(color),
         name=name or "Solid colour",
         colors=[hex_to_int(color)],
         animation="motionless",
@@ -166,7 +175,7 @@ def _resolve(ref: dict):
     if kind == "solid":
         return solid_pattern(str(ref.get("color", "")), str(ref.get("name") or "")[:40])
     if kind == "spec":
-        return pattern_from_spec(ref.get("spec"), pattern_id=f"bdh-live-{uuid.uuid4()}")
+        return pattern_from_spec(ref.get("spec"), pattern_id=str(uuid.uuid4()))
     pid = str(ref.get("id") or "")
     if not _ID.match(pid):
         raise Invalid("pattern id missing")
@@ -377,7 +386,7 @@ def undo(token: str) -> dict:
 def live(ids, spec) -> dict:
     """Push the design being edited straight to the lights."""
     ids = check_ids(ids)
-    _play(ids, pattern_from_spec(spec, pattern_id="bdh-live"))
+    _play(ids, pattern_from_spec(spec, pattern_id=str(uuid.uuid4())))
     return {"on": names(ids)}
 
 
