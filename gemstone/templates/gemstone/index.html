@@ -18,6 +18,7 @@
      data-power-url="{% url 'gemstone_power' %}"
      data-brightness-url="{% url 'gemstone_brightness' %}"
      data-until-url="{% url 'gemstone_until' %}"
+     data-schedule-url="{% url 'gemstone_schedule' %}"
      data-design-url="{% url 'gemstone_design' %}"
      data-live-url="{% url 'gemstone_live' %}"
      data-folders-url="{% url 'gemstone_folders' %}"
@@ -43,16 +44,21 @@
         <div class="insets" id="t-insets"></div>
       </div>
       <div class="band">
-        <button class="pwr" id="t-pwr" aria-label="Lights on or off">⏻</button>
         <div class="pnl t-bright"><div class="lbl"><span>Brightness</span><span id="t-bval">—</span></div>
           <div class="sl" id="t-bslider"><div class="f"></div><span class="ic">☀</span></div></div>
-        <div class="pnl t-time"><div class="lbl"><span>Tonight</span><span id="t-left"></span></div>
-          <div class="tl" id="t-tl"><div class="bar"></div><div class="done"></div><div class="now"></div></div></div>
-        <button class="g-btn t-until" id="t-until"><span class="u1">Keep on until</span><span class="u2" id="t-until-at">No limit ▾</span></button>
+        <button class="pnl t-sched" id="t-sched" data-pop aria-label="Tonight's schedule">
+          <span class="s1" id="t-sched-a">Schedule</span><span class="s2" id="t-sched-b"></span></button>
+      </div>
+      <div class="t-ev" id="t-ev" hidden>
+        <button class="t-evh" id="t-evh" aria-expanded="false">
+          <span class="t-evt">🤖 Autopilot · <b id="t-ev-name"></b></span>
+          <span class="t-evd" id="t-ev-dots"></span><span class="t-evn" id="t-ev-n"></span>
+          <span class="grow"></span><span class="t-evx" id="t-ev-x">Show ▾</span></button>
+        <div class="scroller cards" id="t-evrow" hidden></div>
       </div>
       <div class="t-favs">
         <div class="sh"><h2 id="t-fav-h">Favourites</h2><a href="#patterns">See all patterns ›</a></div>
-        <div class="g-row cards" id="t-favs"></div>
+        <div class="scroller cards" id="t-favs"></div>
       </div>
     </section>
 

@@ -184,6 +184,10 @@ def _resolve(ref: dict):
     if raw is None:  # not seen since start: load the lists once
         ours()
         library()
+        try:
+            tonight_event()  # Autopilot's patterns for tonight's event
+        except (cloud.CloudError, Invalid):
+            pass
         with _known_lock:
             raw = _known.get(pid)
     if raw is None:
@@ -371,6 +375,7 @@ def play(ids, ref) -> dict:
     pattern = _resolve(ref)
     snapshot = _snapshot(ids)
     _play(ids, pattern)
+    _end_dark()
     return {"undo": _keep_undo(snapshot), "name": pattern.name, "on": names(ids)}
 
 
@@ -387,6 +392,7 @@ def live(ids, spec) -> dict:
     """Push the design being edited straight to the lights."""
     ids = check_ids(ids)
     _play(ids, pattern_from_spec(spec, pattern_id=str(uuid.uuid4())))
+    _end_dark()
     return {"on": names(ids)}
 
 
@@ -394,6 +400,8 @@ def power(ids, on: bool, *, admin: bool, now=None) -> dict:
     ids = check_ids(ids)
     for cid in ids:
         cloud.write(lambda c, cid=cid: c.set_on_state(cid, bool(on)), invalidate=(f"state:{cid}",))
+    if on:
+        _end_dark()
     if on and not admin:
         _guest_keep_on(ids, now)
     if not on:
@@ -507,6 +515,416 @@ def enforce_until(now=None) -> bool:
             return False
     app_state(APP).delete("until")
     return True
+
+
+# ---------------------------------------------------------------- autopilot and its schedule
+#
+# Gemstone's "Autopilot" (``/events/settings``) is one object per home group:
+# which controllers it drives, which holidays/teams it celebrates, and the
+# daily window (on at sunset +/- an offset, off at a clock time) the lights
+# run in. There's no on/off flag: the Gemstone app treats "no controllers" as
+# off, so that's what the master switch here does too.
+
+#: Sunset offset bounds and step, in minutes.
+ON_OFFSET_MIN, ON_OFFSET_MAX, ON_OFFSET_STEP = -120, 120, 5
+#: Off times before this belong to the night before ("past midnight").
+NIGHT_ENDS = dt.time(6, 0)
+EVENT_PAGES = 5
+
+_EMOJI = {
+    "maple_leaf": "🍁", "usa": "🇺🇸", "rabbit_face": "🐰", "airplane": "✈️",
+    "christmas_tree": "🎄", "candle": "🕎", "diya_lamp": "🪔", "new_moon": "🌙",
+    "sparkler": "🎇", "light_bulb": "💡", "pumpkin": "🎃", "heart": "❤️",
+    "shamrock": "☘️", "fireworks": "🎆", "turkey": "🦃",
+}
+_NAME_EMOJI = (("thanksgiving", "🦃"), ("halloween", "🎃"), ("valentine", "❤️"),
+               ("patrick", "☘️"), ("new year", "🎆"))
+
+
+def emoji(icon: str | None, name: str = "") -> str:
+    """An emoji for a Gemstone category icon name (``"maple_leaf"``, ``"assets/icons/airplane.svg"``)."""
+    low = (name or "").lower()
+    for word, mark in _NAME_EMOJI:
+        if word in low:
+            return mark
+    key = (icon or "").lower()
+    if "/" in key:
+        key = key.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    return _EMOJI.get(key, "✨")
+
+
+def argb_hex(value) -> str | None:
+    """``0xFFRRGGBB`` (the Gemstone app's colour ints) as ``#rrggbb``."""
+    if value is None:
+        return None
+    try:
+        return f"#{int(value) & 0xFFFFFF:06x}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _hhmm(value) -> dt.time:
+    m = re.fullmatch(r"([01]?\d|2[0-3]):([0-5]\d)", str(value or ""))
+    if not m:
+        raise Invalid("time must be HH:MM")
+    return dt.time(int(m[1]), int(m[2]))
+
+
+def homegroup_id() -> str:
+    """The home group whose autopilot we edit: the only one, or the first with controllers."""
+    async def fetch(client):
+        groups = await client.homegroups()
+        if len(groups) == 1:
+            return groups[0].id
+        for g in groups:
+            if await client.devices(g.id):
+                return g.id
+        return groups[0].id if groups else ""
+    hg = cloud.read("homegroup", 3600, fetch)
+    if not hg:
+        raise Invalid("this Gemstone account has no home group")
+    return hg
+
+
+def _settings(ttl: float = 120):
+    hg = homegroup_id()
+    return cloud.read("autopilot:settings", ttl, lambda c: c.events_settings(hg))
+
+
+def _events() -> list:
+    hg = homegroup_id()
+
+    async def fetch(client):
+        out, seen = [], set()
+        for page in range(EVENT_PAGES):
+            batch = await client.subscribed_events(hg, page)
+            fresh = [e for e in batch if e.event_id not in seen]
+            if not fresh:
+                break
+            seen.update(e.event_id for e in fresh)
+            out.extend(fresh)
+        return sorted(out, key=lambda e: (e.start_date, e.name))
+    return cloud.read("autopilot:events", 1800, fetch)
+
+
+def _categories() -> list:
+    return cloud.read("autopilot-categories", 6 * 3600, lambda c: c.events_categories())
+
+
+def _pct(level) -> int | None:
+    return None if level is None else max(1, round(int(level) * 100 / 255))
+
+
+def _schedule_json(s) -> dict:
+    w = s.schedule
+    return {"on_time": (w.on_time if w else "") or "sunset",
+            "on_offset": int(w.on_offset_minutes) if w else 0,
+            "off_time": (w.off_time if w else "") or "",
+            "off_offset": int(w.off_offset_minutes) if w else 0}
+
+
+def _settings_json(s) -> dict:
+    return {"enabled": bool(s.device_ids), "device_ids": list(s.device_ids),
+            "category_ids": list(s.category_ids),
+            "allow_static": bool(s.allow_static_patterns),
+            "allow_animated": bool(s.allow_animated_patterns),
+            "brightness": _pct(s.brightness), "schedule": _schedule_json(s)}
+
+
+def _event_json(e, *, patterns: bool = False) -> dict:
+    raw = e.raw or {}
+    out = {"id": e.event_id, "name": e.name, "category_id": e.category_id,
+           "category": e.category_name, "emoji": emoji(e.icon, e.name),
+           "color": argb_hex(e.background_color), "start": e.start_date, "end": e.end_date,
+           "home": bool(raw.get("isHomeTeam")),
+           "count": len(e.static_patterns) + len(e.animated_patterns)}
+    if patterns:
+        out["patterns"] = ([pattern_json(p, kind="static") for p in e.static_patterns]
+                           + [pattern_json(p, kind="animated") for p in e.animated_patterns])
+    return out
+
+
+def categories() -> dict:
+    """Autopilot's catalogue, split into holidays (``general``) and sports teams by league."""
+    general, teams, leagues = [], [], []
+    for c in _categories():
+        if c.group == "general":
+            general.append({"id": c.id, "name": c.name, "emoji": emoji(c.icon, c.name),
+                            "color": argb_hex(c.background_color)})
+        else:
+            league = (c.group or "other").upper()
+            if league not in leagues:
+                leagues.append(league)
+            teams.append({"id": c.id, "name": c.name, "league": league})
+    return {"general": general, "teams": teams, "leagues": leagues}
+
+
+def _event_day(e, day: dt.date) -> bool:
+    try:
+        start = dt.date.fromisoformat(str(e.start_date)[:10])
+        end = dt.date.fromisoformat(str(e.end_date or e.start_date)[:10])
+    except ValueError:
+        return False
+    return start <= day <= end
+
+
+def tonight_event(now=None) -> dict | None:
+    """Tonight's autopilot event, with its patterns, or None on an ordinary night."""
+    day = _local_now(now).date()
+    for e in _events():
+        if _event_day(e, day):
+            return _event_json(e, patterns=True)
+    return None
+
+
+def autopilot(now=None) -> dict:
+    """Everything the Autopilot settings page shows."""
+    day = _local_now(now).date()
+    upcoming = []
+    for e in _events():
+        try:
+            end = dt.date.fromisoformat(str(e.end_date or e.start_date)[:10])
+        except ValueError:
+            continue
+        if end >= day:
+            upcoming.append(dict(_event_json(e), tonight=_event_day(e, day)))
+    return {"settings": _settings_json(_settings()), "categories": categories(),
+            "upcoming": upcoming, "controllers": controllers(), "schedule": schedule(now)}
+
+
+# --- sunset
+
+def sunset(day: dt.date, lat: float, lon: float, tz) -> dt.datetime | None:
+    """Sunset on ``day`` at ``lat``/``lon`` (NOAA's approximation, about a minute out), or None at the poles."""
+    import math
+
+    g = 2 * math.pi / 365 * (day.timetuple().tm_yday - 1)
+    eqtime = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g)
+                       - 0.014615 * math.cos(2 * g) - 0.040849 * math.sin(2 * g))
+    decl = (0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g)
+            - 0.006758 * math.cos(2 * g) + 0.000907 * math.sin(2 * g)
+            - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g))
+    phi = math.radians(lat)
+    cos_ha = (math.cos(math.radians(90.833)) / (math.cos(phi) * math.cos(decl))
+              - math.tan(phi) * math.tan(decl))
+    if not -1 <= cos_ha <= 1:
+        return None
+    minutes = 720 - 4 * (lon - math.degrees(math.acos(cos_ha))) - eqtime
+    midnight = dt.datetime.combine(day, dt.time(0), tzinfo=dt.timezone.utc)
+    return (midnight + dt.timedelta(minutes=minutes)).astimezone(tz)
+
+
+def _site():
+    try:
+        from bdh_sdk.location import location
+    except ImportError:  # pragma: no cover - older bdh-sdk
+        return None
+    try:
+        where = location()
+    except Exception:  # noqa: BLE001 - no settings store yet
+        return None
+    return where if where and where.has_coordinates else None
+
+
+def sunset_today(now=None) -> dt.datetime | None:
+    now = _local_now(now)
+    where = _site()
+    if where is None:
+        return None
+    return sunset(now.date(), where.latitude, where.longitude, now.tzinfo)
+
+
+# --- lights off tonight
+
+def dark() -> dict | None:
+    """``{"until": iso}`` while the lights are being kept off for the night."""
+    return app_state(APP).get("dark")
+
+
+def _morning(now) -> dt.datetime:
+    at = now.replace(hour=NIGHT_ENDS.hour, minute=NIGHT_ENDS.minute, second=0, microsecond=0)
+    return at if at > now else at + dt.timedelta(days=1)
+
+
+def set_dark(on: bool, now=None) -> dict | None:
+    """Keep every controller off until morning (``on``), or let the schedule run again."""
+    store = app_state(APP)
+    if not on:
+        store.delete("dark")
+        return None
+    now = _local_now(now)
+    value = {"until": _morning(now).isoformat(), "from": now.isoformat()}
+    store.set("dark", value)
+    ids = [c["id"] for c in controllers()]
+    for cid in ids:
+        cloud.write(lambda c, cid=cid: c.set_on_state(cid, False), invalidate=(f"state:{cid}",))
+    _drop_until(ids)
+    return value
+
+
+def _end_dark() -> None:
+    # Someone turned lights on by hand: that beats "lights off tonight".
+    if dark():
+        app_state(APP).delete("dark")
+
+
+def enforce_dark(now=None) -> bool:
+    """While "lights off tonight" is set, turn off anything that comes on. True if it did."""
+    current = dark()
+    if not current:
+        return False
+    now = _local_now(now)
+    if dt.datetime.fromisoformat(current["until"]) <= now:
+        app_state(APP).delete("dark")
+        return False
+    did = False
+    for c in controllers():
+        cid = c["id"]
+        try:
+            if not state(cid)["on"]:
+                continue
+            cloud.write(lambda cl, cid=cid: cl.set_on_state(cid, False), invalidate=(f"state:{cid}",))
+            did = True
+        except cloud.CloudError:
+            logger.warning("Couldn't keep %s off for the night; will retry", cid)
+    return did
+
+
+# --- the schedule
+
+def schedule(now=None) -> dict:
+    """Tonight's schedule as the Tonight screen shows it."""
+    now = _local_now(now)
+    s = _settings()
+    out = dict(_schedule_json(s), autopilot=bool(s.device_ids), dark=dark(),
+               sunset=None, on_at=None)
+    sun = sunset_today(now)
+    if sun is not None:
+        out["sunset"] = sun.strftime("%H:%M")
+    on_time = out["on_time"]
+    if on_time == "sunset" and sun is not None:
+        out["on_at"] = (sun + dt.timedelta(minutes=out["on_offset"])).strftime("%H:%M")
+    elif on_time not in ("sunset", "sunrise"):
+        try:
+            out["on_at"] = _hhmm(on_time).strftime("%H:%M")
+        except Invalid:
+            pass
+    return out
+
+
+def _check_offset(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        raise Invalid("the sunset offset must be a number of minutes") from None
+    if not ON_OFFSET_MIN <= n <= ON_OFFSET_MAX:
+        raise Invalid(f"the sunset offset must be between {ON_OFFSET_MIN} and {ON_OFFSET_MAX} minutes")
+    if n % ON_OFFSET_STEP:
+        raise Invalid(f"the sunset offset goes in steps of {ON_OFFSET_STEP} minutes")
+    return n
+
+
+def _check_off_time(value, *, admin: bool) -> str:
+    t = _hhmm(value)
+    if not admin and (t > GUEST_LAST or t < NIGHT_ENDS):
+        raise Forbidden(f"Guests can have the lights go off by {GUEST_LAST.strftime('%H:%M')} at the latest")
+    return t.strftime("%H:%M")
+
+
+def _apply_schedule(s, *, on_offset=None, off_time=None, admin: bool) -> bool:
+    """Change ``s.schedule`` in place. True if anything changed."""
+    from pygemstone.models import EventsScheduleWindow
+
+    w = copy.deepcopy(s.schedule) or EventsScheduleWindow(on_time="sunset", off_time="22:00")
+    changed = False
+    if on_offset is not None:
+        n = _check_offset(on_offset)
+        if w.on_time not in ("sunset", "sunrise"):
+            w.on_time = "sunset"  # only sunset-relative on times are offered here
+        changed |= n != w.on_offset_minutes or s.schedule is None
+        w.on_offset_minutes = n
+    if off_time is not None:
+        same = False
+        try:
+            same = _hhmm(off_time) == _hhmm(w.off_time)
+        except Invalid:
+            pass
+        if not same:  # a guest can leave an admin's later time alone
+            w.off_time = _check_off_time(off_time, admin=admin)
+            w.off_offset_minutes = 0
+            changed = True
+    s.schedule = w
+    return changed
+
+
+def _save(s) -> None:
+    cloud.write(lambda c: c.update_events_settings(s), invalidate=("autopilot:",))
+
+
+def set_schedule(*, on_offset=None, off_time=None, dark_tonight=None, admin: bool, now=None) -> dict:
+    """Change tonight's schedule. Anyone can; guests can't push the off time past ``GUEST_LAST``."""
+    if on_offset is None and off_time is None and dark_tonight is None:
+        raise Invalid("nothing to change")
+    if on_offset is not None or off_time is not None:
+        s = copy.deepcopy(_settings(ttl=0))
+        if _apply_schedule(s, on_offset=on_offset, off_time=off_time, admin=admin):
+            _save(s)
+    if dark_tonight is not None:
+        set_dark(bool(dark_tonight), now)
+    return schedule(now)
+
+
+def set_autopilot(changes, *, admin: bool) -> dict:
+    """Change the Autopilot settings (admins only). Returns the settings as saved."""
+    if not admin:
+        raise Forbidden("Only a hub admin can change Autopilot")
+    if not isinstance(changes, dict) or not changes:
+        raise Invalid("nothing to change")
+    known = {"enabled", "device_ids", "allow_static", "allow_animated", "brightness",
+             "add_categories", "remove_categories", "schedule"}
+    unknown = set(changes) - known
+    if unknown:
+        raise Invalid(f"can't change {', '.join(sorted(unknown))}")
+    s = copy.deepcopy(_settings(ttl=0))
+    store = app_state(APP)
+    if "device_ids" in changes:
+        s.device_ids = check_ids(changes["device_ids"])
+    if "enabled" in changes:
+        if not changes["enabled"]:
+            if s.device_ids:
+                store.set("autopilot_devices", list(s.device_ids))
+            s.device_ids = []
+        elif not s.device_ids:
+            mine = [c["id"] for c in controllers()]
+            kept = [i for i in (store.get("autopilot_devices") or []) if i in mine]
+            s.device_ids = kept or mine
+            s.setup_yet = True
+    if "allow_static" in changes:
+        s.allow_static_patterns = bool(changes["allow_static"])
+    if "allow_animated" in changes:
+        s.allow_animated_patterns = bool(changes["allow_animated"])
+    if not (s.allow_static_patterns or s.allow_animated_patterns):
+        raise Invalid("Autopilot needs static or animated patterns, or both")
+    if "brightness" in changes:
+        s.brightness = round(_clamp(changes["brightness"], 1, 100, "brightness") * 255 / 100)
+    if "add_categories" in changes or "remove_categories" in changes:
+        valid = {c.id for c in _categories()}
+        add, remove = changes.get("add_categories") or [], changes.get("remove_categories") or []
+        if not isinstance(add, list) or not isinstance(remove, list):
+            raise Invalid("categories must be a list")
+        bad = [str(i) for i in add if str(i) not in valid]
+        if bad:
+            raise Invalid(f"unknown category {bad[0]!r}")
+        ids = [i for i in s.category_ids if i not in {str(r) for r in remove}]
+        ids += [str(i) for i in add if str(i) not in ids]
+        s.category_ids = ids
+    if "schedule" in changes:
+        sch = changes["schedule"]
+        if not isinstance(sch, dict):
+            raise Invalid("schedule must be an object")
+        _apply_schedule(s, on_offset=sch.get("on_offset"), off_time=sch.get("off_time"), admin=True)
+    _save(s)
+    return _settings_json(s)
 
 
 # ---------------------------------------------------------------- designs and folders

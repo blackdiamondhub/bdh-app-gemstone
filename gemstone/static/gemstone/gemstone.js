@@ -594,31 +594,174 @@
     });
     while (ins.children.length > want.length) ins.lastChild.remove();
     const anyOn = list.some((c) => c.state && c.state.on);
-    $('t-pwr').classList.toggle('on', anyOn);
     if (bright == null || !brightTimer) {
       const p = st.pattern;
       setSlider($('t-bslider'), p ? Math.round(p.brightness * 100 / 255) : 100);
     }
     $('t-bslider').classList.toggle('dis', !anyOn);
     $('t-bval').textContent = anyOn ? sliders.get($('t-bslider')).value + '%' : '—';
-    renderTimeline(list);
+    renderSched();
+    renderEvent();
     renderFavs();
   }
-  function untilFor(list) {
-    const u = S.until;
-    return u && list.some((c) => u.ids.includes(c.id)) ? u : null;
+
+  // Tonight's schedule: Autopilot's sunset-relative on time and its off time.
+  const OFF_MIN = -120, OFF_MAX = 120, OFF_STEP = 5, GUEST_LAST = '22:00', NIGHT_ENDS = '06:00';
+  const atToday = (t) => { const [hh, mm] = t.split(':').map(Number); const d = new Date(); d.setHours(hh, mm, 0, 0); return d; };
+  const signed = (n) => (n < 0 ? '−' : '+') + Math.abs(n);
+  function onLabel(sc) {
+    if (sc.on_time === 'sunset') return '🌅 Sunset' + (sc.on_offset ? ' ' + signed(sc.on_offset) : '');
+    if (sc.on_time === 'sunrise') return '🌄 Sunrise' + (sc.on_offset ? ' ' + signed(sc.on_offset) : '');
+    return '🕔 ' + fmtTime(atToday(sc.on_time));
   }
-  function renderTimeline(list) {
-    const u = untilFor(list), tl = $('t-tl');
-    tl.classList.toggle('none', !u);
-    if (!u) { $('t-left').textContent = 'No limit'; $('t-until-at').textContent = (S.admin ? 'No limit' : 'Pick a time') + ' ▾'; return; }
-    const from = new Date(u.from).getTime(), at = new Date(u.at).getTime(), now = Date.now();
-    const f = clamp((now - from) / Math.max(1, at - from), 0, 1);
-    tl.querySelector('.done').style.width = (f * 100) + '%';
-    tl.querySelector('.now').style.left = (f * 100) + '%';
-    const left = Math.max(0, at - now), hh = Math.floor(left / 3600e3), mm = Math.round((left % 3600e3) / 60e3);
-    $('t-left').textContent = 'Off at ' + fmtTime(new Date(at)) + ' · ' + (hh ? hh + ' h ' : '') + mm + ' min left';
-    $('t-until-at').textContent = fmtTime(new Date(at)) + ' ▾';
+  // When tonight's lights go off: an off time before morning is after midnight.
+  function offAt(sc) {
+    if (!/^\d\d:\d\d$/.test(sc.off_time || '')) return null;
+    const d = atToday(sc.off_time), now = new Date();
+    const late = sc.off_time < NIGHT_ENDS, early = hhmm(now) < NIGHT_ENDS;
+    if (late && !early) d.setDate(d.getDate() + 1);
+    if (!late && early) d.setDate(d.getDate() - 1);
+    return d;
+  }
+  function leftTxt(ms) {
+    const m = Math.max(1, Math.round(ms / 60e3)), hh = Math.floor(m / 60);
+    return (hh ? hh + 'h ' : '') + (m % 60) + 'm';
+  }
+  function renderSched() {
+    const sc = S.schedule, b = $('t-sched');
+    b.hidden = !sc;
+    if (!sc) return;
+    b.classList.toggle('off', !!sc.dark);
+    if (sc.dark) {
+      $('t-sched-a').textContent = '🌙 Schedule off ▾';
+      $('t-sched-b').textContent = "Lights won't come on";
+      return;
+    }
+    const off = offAt(sc);
+    $('t-sched-a').textContent = onLabel(sc) + ' → ' + (off ? fmtTime(off) : '—') + ' ▾';
+    const now = new Date(), on = sc.on_at ? atToday(sc.on_at) : null;
+    let sub;
+    if (!sc.autopilot) sub = 'Autopilot is off';
+    else if (off && now >= off) sub = 'Off for the night';
+    else if (on && now < on && hhmm(now) >= NIGHT_ENDS) sub = 'Comes on at ' + fmtTime(on);
+    else if (off) sub = 'On · off in ' + leftTxt(off - now);
+    else sub = 'On';
+    $('t-sched-b').textContent = sub;
+  }
+  function offOptions(sc) {
+    const out = [], last = S.admin ? 27 * 60 : 22 * 60;
+    for (let m = 17 * 60; m <= last; m += 15) {
+      const t = String(Math.floor(m / 60) % 24).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+      out.push(t);
+    }
+    if (sc.off_time && !out.includes(sc.off_time)) out.push(sc.off_time);
+    const key = (t) => (t < NIGHT_ENDS ? '1' : '0') + t;
+    return out.sort((x, y) => (key(x) < key(y) ? -1 : 1));
+  }
+  function buildSched(p) {
+    const sc = S.schedule;
+    const hd = h('div', 'g-schh');
+    hd.appendChild(h('b', '', 'Schedule'));
+    const tg = h('button', 'g-tg' + (sc.dark ? '' : ' on'));
+    tg.setAttribute('aria-label', sc.dark ? 'Schedule off tonight' : 'Schedule on');
+    tg.appendChild(h('span', 'g-sw'));
+    tg.onclick = () => setSchedule({ dark: !sc.dark });
+    hd.appendChild(tg);
+    p.appendChild(hd);
+    if (sc.dark) {
+      p.appendChild(h('div', 'g-schn', "Lights stay off tonight. They follow the schedule again tomorrow, or when someone turns them on."));
+      return;
+    }
+    if (!sc.autopilot) p.appendChild(h('div', 'g-schn', 'Autopilot is off, so the lights only come on by hand.'));
+    const r1 = h('div', 'g-schr');
+    r1.appendChild(h('span', 'g-schl', 'On at sunset'));
+    const st = h('div', 'g-step');
+    const minus = h('button', '', '−'), plus = h('button', '', '+');
+    st.append(minus, h('span', '', (sc.on_offset ? signed(sc.on_offset) : '0') + ' min'), plus);
+    minus.disabled = sc.on_offset <= OFF_MIN;
+    plus.disabled = sc.on_offset >= OFF_MAX;
+    minus.onclick = () => nudgeOffset(-OFF_STEP);
+    plus.onclick = () => nudgeOffset(OFF_STEP);
+    r1.appendChild(st);
+    p.appendChild(r1);
+    if (sc.on_at) p.appendChild(h('div', 'g-schs', 'Today: lights on at ' + fmtTime(atToday(sc.on_at))));
+    const r2 = h('div', 'g-schr');
+    r2.appendChild(h('span', 'g-schl', 'Off at'));
+    const s = h('select', 'g-sel');
+    offOptions(sc).forEach((t) => {
+      const o = h('option', '', fmtTime(atToday(t)) + (t < NIGHT_ENDS ? ' (after midnight)' : ''));
+      o.value = t;
+      if (t === sc.off_time) o.selected = true;
+      s.appendChild(o);
+    });
+    s.onchange = () => setSchedule({ off_time: s.value });
+    r2.appendChild(s);
+    p.appendChild(r2);
+    if (!S.admin) p.appendChild(h('div', 'g-schs', 'Guests: lights off by ' + fmtTime(atToday(GUEST_LAST)) + ' at the latest'));
+  }
+  function redrawSched() {
+    if (!pop.hidden && pop.classList.contains('g-schp')) { pop.textContent = ''; buildSched(pop); }
+  }
+  let nudgeT = null, nudgeFrom = null;
+  function nudgeOffset(d) {
+    const sc = S.schedule;
+    if (nudgeFrom == null) nudgeFrom = clone(sc);
+    sc.on_offset = clamp(sc.on_offset + d, OFF_MIN, OFF_MAX);
+    if (sc.on_time !== 'sunrise') sc.on_time = 'sunset';
+    if (sc.sunset) { const t = atToday(sc.sunset); t.setMinutes(t.getMinutes() + sc.on_offset); sc.on_at = hhmm(t); }
+    renderSched(); redrawSched();
+    clearTimeout(nudgeT);
+    nudgeT = setTimeout(() => { const prev = nudgeFrom; nudgeFrom = null; setSchedule({ on_offset: sc.on_offset }, prev); }, 700);
+  }
+  async function setSchedule(body, prev) {
+    prev = prev || clone(S.schedule);
+    const before = ctrls().map((c) => [c, c.state]);
+    if ('off_time' in body) { S.schedule.off_time = body.off_time; toast(['Lights go off at ', { b: fmtTime(atToday(body.off_time)) }]); }
+    if ('on_offset' in body && S.schedule.on_at) toast(['Lights come on at ', { b: fmtTime(atToday(S.schedule.on_at)) }]);
+    if ('dark' in body) {
+      S.schedule.dark = body.dark ? { until: '' } : null;
+      if (body.dark) ctrls().forEach((c) => { c.state = Object.assign({}, c.state, { on: false }); });
+      toast(body.dark ? "Lights stay off tonight" : 'Schedule back on');
+    }
+    renderView(); redrawSched();
+    pending++;
+    try {
+      const r = await api(url('schedule'), body);
+      S.schedule = r.schedule;
+    } catch (e) {
+      S.schedule = prev;
+      before.forEach(([c, st]) => { c.state = st; });
+      fail(e);
+    } finally { pending--; renderView(); redrawSched(); if (!pending) refreshSoon(2000); }
+  }
+
+  // Autopilot's event tonight (a holiday or a game): its patterns, folded away until asked for.
+  let evOpen = false;
+  function renderEvent() {
+    const ev = S.tonight_event, box = $('t-ev');
+    box.hidden = !ev;
+    if (!ev) return;
+    $('t-ev-name').textContent = (ev.emoji ? ev.emoji + ' ' : '') + ev.name;
+    const pats = ev.patterns || [];
+    const dots = $('t-ev-dots'), cols = [];
+    pats.forEach((p) => (p.colors || []).forEach((c) => { if (!cols.includes(c)) cols.push(c); }));
+    if (dots._key !== cols.join()) {
+      dots._key = cols.join(); dots.textContent = '';
+      cols.slice(0, 5).forEach((c) => { const i = h('i'); i.style.background = c; dots.appendChild(i); });
+    }
+    $('t-ev-n').textContent = pats.length + (pats.length === 1 ? ' pattern' : ' patterns');
+    $('t-ev-x').textContent = evOpen ? 'Hide ▴' : 'Show ▾';
+    $('t-evh').setAttribute('aria-expanded', evOpen ? 'true' : 'false');
+    const row = $('t-evrow');
+    row.hidden = !evOpen;
+    if (!evOpen) return;
+    const first = selCtrls()[0], fs = (first && first.state) || {};
+    const key = JSON.stringify([ev.id, pats.map((p) => p.id), PV && !lightsOn() ? PV.pat.id : null,
+      fs.on && fs.pattern ? fs.pattern.id : null]);
+    if (row._key === key && row.children.length) return;
+    row._key = key;
+    row.textContent = '';
+    pats.forEach((p) => row.appendChild(card(p)));
   }
   async function renderFavs() {
     const row = $('t-favs');
@@ -628,11 +771,10 @@
       const o = await loadOurs();
       pats = o.patterns.filter((p) => p.fav);
       if (!pats.length) { pats = o.patterns.slice(); title = 'Ours'; }
-      if (!pats.length) { pats = (await loadLib()).slice(0, 12); title = 'From the Gemstone library'; }
+      if (!pats.length) { pats = (await loadLib()).slice(0, 24); title = 'From the Gemstone library'; }
     } catch (e) { row.textContent = ''; row.appendChild(h('div', 'empty', e.message)); return; }
     if (view !== 'tonight') return;
     $('t-fav-h').textContent = title;
-    pats = pats.slice(0, 12);
     // Only rebuild the cards when what they show has changed.
     const first = selCtrls()[0], fs = (first && first.state) || {};
     const key = JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors]),
@@ -643,36 +785,11 @@
     pats.forEach((p) => row.appendChild(card(p)));
   }
   if (!SETUP) {
-  $('t-pwr').onclick = () => setLights(!lightsOn());
-  $('t-until').setAttribute('data-pop', '');
-  $('t-until').onclick = (e) => {
-    const btn = e.currentTarget;
-    openPop(btn, (p) => {
-      const now = new Date(), base = new Date(now); base.setMinutes(0, 0, 0);
-      let opts = [];
-      for (let i = 1; i <= 7; i++) opts.push(new Date(base.getTime() + i * 3600e3));
-      if (!S.admin) {
-        const dl = new Date(S.guest_deadline);
-        opts = opts.filter((d) => d <= dl);
-        if (!opts.length || opts[opts.length - 1] < dl) opts.push(dl);
-      }
-      const cur = untilFor(selCtrls());
-      p.appendChild(h('div', 'it dis', S.admin ? 'Keep the lights on until' : 'Keep on until (guests: ' + fmtTime(new Date(S.guest_deadline)) + ' latest)'));
-      opts.forEach((d) => p.appendChild(popItem(fmtTime(d), cur && Math.abs(new Date(cur.at) - d) < 60e3 ? 'on' : '', () => setUntil(hhmm(d)))));
-      if (S.admin) { p.appendChild(h('hr')); p.appendChild(popItem('No limit', cur ? '' : 'on', () => setUntil(''))); }
-    });
+  $('t-sched').onclick = (e) => {
+    if (!S.schedule) return;
+    openPop(e.currentTarget, buildSched, 'g-schp');
   };
-  }
-  async function setUntil(at) {
-    closePop();
-    const prev = S.until;
-    toast(at ? ['Lights go off at ', { b: at }] : 'No time limit');
-    pending++;
-    try {
-      const r = await api(url('until'), { ids: sel, at });
-      S.until = r.until;
-    } catch (e) { S.until = prev; fail(e); }
-    finally { pending--; renderView(); }
+  $('t-evh').onclick = () => { evOpen = !evOpen; renderEvent(); };
   }
 
   // ------------------------------------------------------------ sliders
@@ -1284,7 +1401,7 @@
       if (scenes.s.el.offsetParent) scenes.s.fit();
       if (scenes.s.size && SU.svgSize !== scenes.s.size) { SU.svgSize = scenes.s.size; renderOverlay(); }
     }
-    if (view === 'tonight' && tick % 20 === 0) renderTimeline(selCtrls());
+    if (view === 'tonight' && tick % 20 === 0) renderSched();
   }
   setInterval(frame, 250);
   window.addEventListener('resize', () => { if (view === 'setup') renderOverlay(); });

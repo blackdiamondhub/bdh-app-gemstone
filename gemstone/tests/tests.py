@@ -15,7 +15,8 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from PIL import Image
-from pygemstone.models import Device, DeviceState, DownloadablePattern, Folder, FolderPattern, Pattern
+from pygemstone.models import (Device, DeviceState, DownloadablePattern, EventCategory, EventsSettings, Folder,
+                               FolderPattern, HomeGroup, Pattern, SubscribedEvent)
 
 from bdh_sdk import INFO, ON, WARN, secrets
 from bdh_sdk.testing import FakeBroker, assert_plugin_importable
@@ -60,6 +61,27 @@ class FakeGemstone:
         self.fps = [self._fp("f-ours", pat("p-ours", "Sunset", (0xFF, 0xFF00)), NOW)]
         self.library = [DownloadablePattern.from_api({"id": "d1", "patternData": pat("p-lib", "Candy cane"),
                                                       "category": "christmas"})]
+        self.events_raw = {"homegroupId": "hg-1", "categoryIds": ["usa", "nhl-van"], "deviceIds": ["house"],
+                           "setupYet": True, "allowStaticPatterns": True, "allowAnimatedPatterns": True,
+                           "brightness": 255, "futureField": {"keep": 1},
+                           "schedule": {"onTime": "sunset", "onOffsetInMinutes": -15,
+                                        "offTime": "21:00", "offOffsetInMinutes": 0}}
+        self.events = [
+            {"eventId": "e-game", "name": "Canucks vs Flames", "categoryId": "nhl-van",
+             "categoryName": "Vancouver Canucks", "icon": "", "startDate": "2026-11-24", "endDate": "2026-11-24",
+             "isHomeTeam": True, "staticPatterns": [pat("p-van", "Canucks")], "animatedPatterns": []},
+            {"eventId": "e-thanks", "name": "Thanksgiving Day", "categoryId": "usa", "categoryName": "USA",
+             "icon": "usa", "backgroundColor": 0xFFB5651D, "startDate": "2026-11-26", "endDate": "2026-11-26",
+             "staticPatterns": [pat("p-t1", "Harvest"), pat("p-t2", "Pumpkin")],
+             "animatedPatterns": [pat("p-t3", "Leaves", animation="chase"), pat("p-t4", "Feast", animation="chase")]},
+        ]
+        self.categories = [
+            {"id": "canada", "name": "Canada", "group": "general", "icon": "maple_leaf"},
+            {"id": "usa", "name": "USA", "group": "general", "icon": "usa"},
+            {"id": "fun", "name": "Fun", "group": "general", "icon": "assets/icons/airplane.svg"},
+            {"id": "nhl-van", "name": "Vancouver Canucks", "group": "nhl"},
+            {"id": "nfl-sea", "name": "Seattle Seahawks", "group": "nfl"},
+        ]
         self.writes = []  # (op, args, monotonic start, monotonic end)
         self.inflight = 0
         self.max_inflight = 0
@@ -83,8 +105,20 @@ class FakeGemstone:
         return [w[1] for w in self.writes if w[0] == op]
 
     # reads
-    async def devices(self):
+    async def devices(self, homegroup_id=None):
         return list(self.devices_)
+
+    async def homegroups(self):
+        return [HomeGroup.from_api({"id": "hg-1", "name": "Home"})]
+
+    async def events_settings(self, homegroup_id):
+        return EventsSettings.from_api(json.loads(json.dumps(self.events_raw)))
+
+    async def subscribed_events(self, homegroup_id, page=0):
+        return [SubscribedEvent.from_api(e) for e in self.events] if page == 0 else []
+
+    async def events_categories(self):
+        return [EventCategory.from_api(c) for c in self.categories]
 
     async def device_state(self, cid):
         return DeviceState.from_api(json.loads(json.dumps(self.states[cid])))
@@ -128,6 +162,11 @@ class FakeGemstone:
     async def delete_pattern(self, folder_id, pattern_id):
         await self._write("delete_pattern", folder_id, pattern_id)
         self.fps = [fp for fp in self.fps if not (fp.folder_id == folder_id and fp.pattern.id == pattern_id)]
+
+    async def update_events_settings(self, settings):
+        body = json.loads(json.dumps(settings.to_api()))
+        await self._write("events_settings", body)
+        self.events_raw = body
 
     async def impulse(self, cid, lights):
         await self._write("impulse", cid, list(lights))
@@ -344,11 +383,127 @@ class WorkerTests(Fresh, TestCase):
         secrets.delete("gemstone_password", app="gemstone")
         self.assertIsNone(worker.run_cleanup(NOW))
 
+    def test_tick_keeps_the_lights_off_tonight(self):
+        service.set_dark(True, now=self.local(19))
+        self.fake.states["house"]["onState"] = True
+        cloud.forget("state:")
+        worker.tick(self.local(20))
+        self.assertFalse(self.fake.states["house"]["onState"])
+
     def test_should_start(self):
         self.assertTrue(worker.should_start(["/x/bdh_sdk/runtime/__main__.py"]))
         self.assertFalse(worker.should_start(["manage.py", "test"]))
         with patch.dict("os.environ", {"BDH_GEMSTONE_WORKER": "0"}):
             self.assertFalse(worker.should_start(["/x/bdh_sdk/runtime/__main__.py"]))
+
+
+class AutopilotTests(Fresh, TestCase):
+    def last_write(self):
+        return self.fake.ops("events_settings")[-1][0]
+
+    def test_guest_off_time_is_capped_at_ten(self):
+        with self.assertRaises(service.Forbidden):
+            service.set_schedule(off_time="22:05", admin=False)
+        with self.assertRaises(service.Forbidden):
+            service.set_schedule(off_time="00:30", admin=False)
+        self.assertEqual(self.fake.ops("events_settings"), [])
+        service.set_schedule(off_time="22:00", admin=False)
+        self.assertEqual(self.last_write()["schedule"]["offTime"], "22:00")
+        service.set_schedule(off_time="23:30", admin=True)
+        self.assertEqual(self.last_write()["schedule"]["offTime"], "23:30")
+        # A guest nudging the start time leaves an admin's later off time alone.
+        out = service.set_schedule(on_offset=-30, off_time="23:30", admin=False)
+        self.assertEqual((out["on_offset"], out["off_time"]), (-30, "23:30"))
+        service.set_schedule(off_time="00:30", admin=True)
+        self.assertEqual(self.last_write()["schedule"]["offTime"], "00:30")
+        with self.assertRaises(service.Invalid):
+            service.set_schedule(off_time="25:00", admin=True)
+
+    def test_guest_can_move_the_sunset_offset_within_bounds(self):
+        out = service.set_schedule(on_offset=-30, admin=False)
+        self.assertEqual(out["on_offset"], -30)
+        self.assertEqual(self.last_write()["schedule"]["onOffsetInMinutes"], -30)
+        for bad in (125, -125, 7, "soon"):
+            with self.assertRaises(service.Invalid, msg=bad):
+                service.set_schedule(on_offset=bad, admin=False)
+        with self.assertRaises(service.Invalid):
+            service.set_schedule(admin=True)
+
+    def test_writes_keep_fields_the_app_does_not_know(self):
+        service.set_autopilot({"brightness": 50}, admin=True)
+        body = self.last_write()
+        self.assertEqual(body["futureField"], {"keep": 1})
+        self.assertEqual(body["brightness"], 128)
+        self.assertEqual(body["homegroupId"], "hg-1")
+        self.assertEqual(body["schedule"]["onTime"], "sunset")
+
+    def test_only_admins_change_autopilot(self):
+        with self.assertRaises(service.Forbidden):
+            service.set_autopilot({"brightness": 50}, admin=False)
+        with self.assertRaises(service.Invalid):
+            service.set_autopilot({"colour": "red"}, admin=True)
+        with self.assertRaises(service.Invalid):
+            service.set_autopilot({"allow_static": False, "allow_animated": False}, admin=True)
+        with self.assertRaises(service.Invalid):
+            service.set_autopilot({"add_categories": ["nope"]}, admin=True)
+        self.assertEqual(self.fake.ops("events_settings"), [])
+
+    def test_categories_split_into_holidays_and_teams(self):
+        cats = service.categories()
+        self.assertEqual([(c["id"], c["emoji"]) for c in cats["general"]],
+                         [("canada", "🍁"), ("usa", "🇺🇸"), ("fun", "✈️")])
+        self.assertEqual([(t["id"], t["league"]) for t in cats["teams"]], [("nhl-van", "NHL"), ("nfl-sea", "NFL")])
+        self.assertEqual(cats["leagues"], ["NHL", "NFL"])
+        out = service.set_autopilot({"add_categories": ["nfl-sea", "canada"], "remove_categories": ["usa"]},
+                                    admin=True)
+        self.assertEqual(out["category_ids"], ["nhl-van", "nfl-sea", "canada"])
+
+    def test_tonight_event_by_date(self):
+        self.assertIsNone(service.tonight_event(self.local(19)))
+        ev = service.tonight_event(timezone.make_aware(dt.datetime(2026, 11, 26, 19, 0)))
+        self.assertEqual((ev["name"], ev["emoji"], ev["color"], ev["count"]), ("Thanksgiving Day", "🦃", "#b5651d", 4))
+        self.assertEqual([(p["name"], p["kind"]) for p in ev["patterns"]],
+                         [("Harvest", "static"), ("Pumpkin", "static"), ("Leaves", "animated"), ("Feast", "animated")])
+        game = service.tonight_event(timezone.make_aware(dt.datetime(2026, 11, 24, 23, 0)))
+        self.assertTrue(game["home"])
+        ap = service.autopilot(timezone.make_aware(dt.datetime(2026, 11, 25, 12, 0)))
+        self.assertEqual([(e["name"], e["tonight"]) for e in ap["upcoming"]], [("Thanksgiving Day", False)])
+
+    def test_master_switch_remembers_the_lights(self):
+        self.assertTrue(service.autopilot()["settings"]["enabled"])
+        off = service.set_autopilot({"enabled": False}, admin=True)
+        self.assertEqual((off["enabled"], off["device_ids"]), (False, []))
+        on = service.set_autopilot({"enabled": True}, admin=True)
+        self.assertEqual(on["device_ids"], ["house"])
+        with self.assertRaises(service.Invalid):
+            service.set_autopilot({"device_ids": []}, admin=True)
+        service.set_autopilot({"enabled": False}, admin=True)
+        from bdh_sdk.storage import app_state
+        app_state(service.APP).delete("autopilot_devices")
+        self.assertEqual(service.set_autopilot({"enabled": True}, admin=True)["device_ids"], ["house", "tub"])
+
+    def test_lights_off_tonight(self):
+        service.set_schedule(dark_tonight=True, admin=False, now=self.local(19))
+        self.assertFalse(self.fake.states["house"]["onState"])
+        self.assertEqual(dt.datetime.fromisoformat(service.dark()["until"]),
+                         timezone.make_aware(dt.datetime(2026, 11, 22, 6, 0)))
+        self.fake.states["tub"]["onState"] = True
+        cloud.forget("state:")
+        self.assertTrue(service.enforce_dark(self.local(21)))
+        self.assertFalse(self.fake.states["tub"]["onState"])
+        self.assertFalse(service.enforce_dark(self.local(22)))
+        # Playing something by hand wins over "lights off tonight".
+        service.play(["house"], {"id": "p-lib"})
+        self.assertIsNone(service.dark())
+        service.set_dark(True, now=self.local(19))
+        self.assertFalse(service.enforce_dark(timezone.make_aware(dt.datetime(2026, 11, 22, 6, 1))))
+        self.assertIsNone(service.dark())
+
+    def test_sunset(self):
+        from zoneinfo import ZoneInfo
+        at = service.sunset(dt.date(2026, 6, 21), 47.61, -122.33, ZoneInfo("America/Los_Angeles"))
+        self.assertEqual((at.hour, at.minute // 10), (21, 1))  # 9:11 PM in Seattle
+        self.assertIsNone(service.sunset(dt.date(2026, 6, 21), 89.9, 0, ZoneInfo("UTC")))
 
 
 def jpeg(w=800, h=400, color=(200, 150, 100)):
@@ -428,7 +583,13 @@ class ViewTests(Fresh, TestCase):
         page = self.client.get(reverse("gemstone_index"))
         self.assertContains(page, 'id="gs-initial"')
         self.assertContains(page, "Hot Tub")
-        self.assertNotContains(page, "Schedule")
+        self.assertContains(page, 'id="t-sched"')
+        for gone in ('id="t-pwr"', 'id="t-until"', "Just tonight"):
+            self.assertNotContains(page, gone)
+        data = json.loads(page.content.decode().split('id="gs-initial" type="application/json">', 1)[1]
+                          .split("</script>", 1)[0])
+        self.assertEqual(data["schedule"]["off_time"], "21:00")
+        self.assertIn("tonight_event", data)
 
     def test_state_when_not_configured(self):
         secrets.delete("gemstone_password", app="gemstone")
@@ -490,6 +651,27 @@ class ViewTests(Fresh, TestCase):
         folders = self.client.get(reverse("gemstone_ours")).json()["folders"]
         self.assertEqual({f["name"]: f["locked"] for f in folders},
                          {"Our designs": True, "Holidays": True, "Guest designs": False})
+
+    def test_guest_schedule_api(self):
+        self.assertEqual(self.post("gemstone_schedule", {"off_time": "22:30"}).status_code, 403)
+        r = self.post("gemstone_schedule", {"on_offset": -20, "off_time": "22:00"})
+        self.assertEqual((r.json()["schedule"]["on_offset"], r.json()["schedule"]["off_time"]), (-20, "22:00"))
+        self.assertEqual(self.post("gemstone_schedule", {"on_offset": 3}).status_code, 400)
+        r = self.post("gemstone_schedule", {"dark": True})
+        self.assertTrue(r.json()["schedule"]["dark"])
+
+    def test_autopilot_is_admin_only(self):
+        self.assertEqual(self.client.get(reverse("gemstone_autopilot")).status_code, 404)
+        self.assertEqual(self.client.get(reverse("gemstone_autopilot_api")).status_code, 403)
+        self.assertEqual(self.post("gemstone_autopilot_api", {"brightness": 40}).status_code, 403)
+        with patch("gemstone.views.is_admin", return_value=True):
+            page = self.client.get(reverse("gemstone_autopilot"))
+            self.assertContains(page, 'data-mode="autopilot"')
+            self.assertContains(page, 'id="ap-data"')
+            self.assertContains(page, "Vancouver Canucks")
+            self.assertContains(page, 'data-bdh-nav="hub_settings_app"')
+            r = self.post("gemstone_autopilot_api", {"schedule": {"off_time": "23:45"}})
+            self.assertEqual(r.json()["settings"]["schedule"]["off_time"], "23:45")
 
     def test_guest_cannot_clear_limit(self):
         self.assertEqual(self.post("gemstone_until", {"ids": ["house"], "at": ""}).status_code, 403)
@@ -553,7 +735,8 @@ class PluginTests(SimpleTestCase):
         self.assertEqual(spec.network, "outbound")
         self.assertEqual({s.key for s in spec.settings}, {"gemstone_email", "gemstone_password"})
         # Photos & light paths live under the hub's Settings → Gemstone.
-        self.assertEqual([p.url_name for p in spec.settings_pages], ["gemstone_settings"])
+        self.assertEqual([p.url_name for p in spec.settings_pages], ["gemstone_settings", "gemstone_autopilot"])
+        self.assertEqual(reverse("gemstone_autopilot"), "/gemstone/autopilot/")
         self.assertEqual(reverse("gemstone_settings"), "/gemstone/settings/")
 
     def test_tile_is_named_after_the_product(self):
@@ -655,6 +838,14 @@ class LightsSwitchTests(SimpleTestCase):
         self.assertEqual(sorted(used - setup_only - app), [])
         for shared in ("gs", "gs-msg", "gs-toast", "gs-toast-text", "gs-pop"):
             self.assertIn(shared, setup)
+
+    def test_autopilot_page_has_every_element_its_script_uses(self):
+        html = (ROOT / "templates/gemstone/autopilot.html").read_text(encoding="utf-8")
+        js = (ROOT / "static/gemstone/autopilot.js").read_text(encoding="utf-8")
+        have = set(re.findall(r'id="([^"{]+)"', html)) | set(re.findall(r'json_script:"([\w-]+)"', html))
+        used = set(re.findall(r"(?:\$|getElementById)\('([\w-]+)'\)", js))
+        self.assertGreater(len(used), 10)
+        self.assertEqual(sorted(used - have), [])
 
 class LayoutRunNameTests(Fresh, TestCase):
     """Runs aren't named any more; the UI sends whatever and the server numbers them."""
@@ -797,8 +988,8 @@ class OptimisticUiTests(SimpleTestCase):
         self.assertLess(opt.index("apply()"), opt.index("await "))
         for name in ("play", "setLights"):
             self.assertIn("optimistic(", self.body(name), name)
-        until = self.body("setUntil")
-        self.assertLess(until.index("pending++"), until.index("await "))
+        sched = self.body("setSchedule")
+        self.assertLess(sched.index("pending++"), sched.index("await "))
 
     def test_poll_does_not_overwrite_a_pending_write(self):
         self.assertRegex(self.js, r"if \(pending\) return;")
