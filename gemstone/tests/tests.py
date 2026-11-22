@@ -670,6 +670,43 @@ class LayoutRunNameTests(Fresh, TestCase):
         self.assertNotIn("SU.open", js)
 
 
+class RunDirectionTests(Fresh, TestCase):
+    """Setup had no way to see or change which way a pattern flows along a run."""
+
+    def setUp(self):
+        super().setUp()
+        self.js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
+
+    def test_reversed_points_are_saved_in_order(self):
+        # Direction is the point order; the server must keep it exactly.
+        pts = [[0.9, 0.5], [0.5, 0.2], [0.1, 0.5]]
+        self.assertEqual(layout.save("house", [{"points": pts}])["runs"][0]["points"], pts)
+        self.assertEqual(layout.get("house")["runs"][0]["points"], pts)
+
+    def test_each_run_has_an_undoable_reverse_button(self):
+        body = self.js[self.js.index("function renderRuns()"):self.js.index("function renderOverlay()")]
+        self.assertIn("'Reverse direction'", body)
+        rev = body[body.index("rev.onclick"):]
+        rev = rev[:rev.index("\n")]
+        for need in ("pushHist()", "r.points.reverse()", "runsChanged()"):
+            self.assertIn(need, rev)
+
+    def test_arrows_show_flow_above_the_lights(self):
+        ov = self.js[self.js.index("function renderOverlay()"):self.js.index("function flowArrows(")]
+        self.assertIn("flowArrows(pts)", ov)
+        # visible over the lights, under the draggable handles
+        self.assertLess(ov.index("SETUP_LIGHT"), ov.index("flowArrows(pts)"))
+        self.assertLess(ov.index("flowArrows(pts)"), ov.index("r: act ? 11 : 8"))
+        fa = self.js[self.js.index("function flowArrows("):self.js.index("function runLabel(")]
+        self.assertIn("Math.atan2(b[1] - a[1], b[0] - a[0])", fa)  # points first -> last
+
+    def test_preview_flows_in_point_order(self):
+        dots = self.js[self.js.index("    layoutDots() {"):self.js.index("    draw(pattern")]
+        self.assertIn("run.points.map((p) => this.toPx(p))", dots)
+        self.assertIn("offset + j", dots)
+        self.assertNotIn("reverse", dots)
+
+
 class SelectedCardRingTests(SimpleTestCase):
     """Card rows clip overflow, so a highlight drawn outside a card gets cut off
     (the Tonight favourite's border was). Rings must be drawn inside the card."""

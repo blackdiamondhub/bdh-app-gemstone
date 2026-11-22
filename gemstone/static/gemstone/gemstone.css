@@ -203,6 +203,8 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .run .rh{display:flex;align-items:center;gap:16px;min-height:84px;padding:0 20px;cursor:pointer}
 .gs .run small{color:var(--t3);font-size:18px;display:block}
 .gs .run .dots{color:var(--t3);padding:10px}
+.gs .run .rev{font-size:26px;color:var(--t2,var(--t))}
+.gs .run .dots:disabled{opacity:.3}
 .gs .run input{height:56px;border-radius:14px;background:var(--bg);border:1px solid var(--s3);color:var(--t);font:inherit;font-size:20px;padding:0 14px;outline:0;min-width:0}
 .gs .run .g-btn{height:56px;font-size:18px;padding:0 18px}
 .gs .s-add{height:64px}

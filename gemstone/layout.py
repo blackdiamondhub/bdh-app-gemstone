@@ -7,8 +7,9 @@ A layout lives in app state under ``layout:<controller id>``::
 Points are fractions of the hero's width/height (0..1) so they work at any
 size. A run is just where lights show in the picture: the preview spaces dots
 evenly along it and the pattern flows through the runs in the order they were
-drawn. How many real lights a run holds, or which end the string starts at,
-doesn't matter for a preview, so neither is stored.
+drawn, and along each run from its first point to its last. Reversing a run
+(the ⇄ button) just reverses its points, so no separate flag is stored. How
+many real lights a run holds doesn't matter for a preview, so it isn't stored.
 """
 from __future__ import annotations
 
