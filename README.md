@@ -13,10 +13,10 @@ number of controllers.
   Tapping a pattern plays it right away on every selected controller, with an Undo toast.
 - **Create** — pick colours, an animation, speed, brightness and direction. Designs save
   automatically; "Live on lights" pushes the design to the real lights while you edit.
-- **Setup** (admins) — per controller, upload a house photo (stylized to a night look on the
-  hub), draw the light runs along the roofline, mark where each run starts and how many LEDs it
-  has, and blink the first 10 lights to find the real start. Without a photo the app draws a
-  simple house with one straight run.
+- **Setup** (admins, hub Settings → Gemstone → Photos & light paths) — per controller, upload a
+  photo of the house and draw the light runs on it. The preview spaces dots evenly along each run
+  and patterns flow through the runs in the order they were drawn. Tap a point to delete it, or a
+  line to cut it in two. Without a photo the app draws a simple house with one straight run.
 
 Guests (anyone not signed in as a hub admin) get Tonight, Patterns and Create. Their designs go
 into a Gemstone folder called **Guest designs** with a date-coded name, they can only keep the

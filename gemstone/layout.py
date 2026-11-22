@@ -2,12 +2,13 @@
 
 A layout lives in app state under ``layout:<controller id>``::
 
-    {"photo": bool, "look": "night"|"original"|"drawing", "v": int,
-     "runs": [{"name": str, "points": [[x, y], ...], "leds": int, "reverse": bool}]}
+    {"photo": bool, "v": int, "runs": [{"name": str, "points": [[x, y], ...]}]}
 
 Points are fractions of the hero's width/height (0..1) so they work at any
-size. The first point of a run is where its LEDs start, unless ``reverse``.
-Runs are wired one after another, so run 2's first LED follows run 1's last.
+size. A run is just where lights show in the picture: the preview spaces dots
+evenly along it and the pattern flows through the runs in the order they were
+drawn. How many real lights a run holds, or which end the string starts at,
+doesn't matter for a preview, so neither is stored.
 """
 from __future__ import annotations
 
@@ -22,7 +23,6 @@ from . import stylize
 APP = "gemstone"
 MAX_RUNS = 8
 MAX_POINTS = 200
-MAX_LEDS = 5000
 _CID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 
 
@@ -36,16 +36,28 @@ def check_cid(cid: str) -> str:
     return cid
 
 
-def default_layout(leds: int = 100) -> dict:
+def default_layout() -> dict:
     """No photo: the built-in house drawing with one straight run along the eave."""
-    return {"photo": False, "look": "night", "v": 0,
-            "runs": [{"name": "Roofline", "points": [[0.12, 0.42], [0.88, 0.42]],
-                      "leds": max(1, min(MAX_LEDS, int(leds or 100))), "reverse": False}]}
+    return {"photo": False, "v": 0, "runs": [{"name": "Roofline", "points": [[0.12, 0.42], [0.88, 0.42]]}]}
 
 
-def get(cid: str, leds: int = 100) -> dict:
+_OLD_RUN_KEYS = ("leds", "reverse")
+
+
+def get(cid: str) -> dict:
     data = app_state(APP).get(f"layout:{check_cid(cid)}")
-    return data if data else default_layout(leds)
+    if not data:
+        return default_layout()
+    look = data.get("look")
+    data = {k: v for k, v in data.items() if k != "look"}
+    data["runs"] = [{k: v for k, v in r.items() if k not in _OLD_RUN_KEYS} for r in data.get("runs") or []]
+    if look and look != "original" and data.get("photo"):
+        # Before 0.1.0b5 photos could be restyled (night / drawing); go back to
+        # the photo as uploaded, which is kept alongside.
+        _restore_original(cid)
+        data["v"] = int(data.get("v", 0)) + 1
+        app_state(APP).set(f"layout:{cid}", data)
+    return data
 
 
 def _point(p) -> list[float]:
@@ -70,45 +82,21 @@ def clean_runs(runs) -> list[dict]:
         points = run.get("points")
         if not isinstance(points, list) or not 2 <= len(points) <= MAX_POINTS:
             raise Invalid(f"run {i} needs 2 to {MAX_POINTS} points")
-        try:
-            leds = int(run.get("leds"))
-        except (TypeError, ValueError):
-            raise Invalid(f"run {i} needs a number of lights") from None
-        if not 1 <= leds <= MAX_LEDS:
-            raise Invalid(f"run {i} has 1 to {MAX_LEDS} lights")
         name = " ".join(str(run.get("name") or f"Run {i}").split())[:40] or f"Run {i}"
-        out.append({"name": name, "points": [_point(p) for p in points], "leds": leds,
-                    "reverse": bool(run.get("reverse"))})
+        out.append({"name": name, "points": [_point(p) for p in points]})
     return out
 
 
-def save(cid: str, runs=None, look: str | None = None, leds: int = 100) -> dict:
-    current = get(cid, leds)
-    data = dict(current)
-    if runs is not None:
-        data["runs"] = clean_runs(runs)
-    if look is not None:
-        if look not in stylize.LOOKS:
-            raise Invalid("look is night, original or drawing")
-        if look != current.get("look") and current.get("photo"):
-            _render(cid, look)
-            data["v"] = int(current.get("v", 0)) + 1
-        data["look"] = look
+def save(cid: str, runs) -> dict:
+    data = dict(get(cid), runs=clean_runs(runs))
     app_state(APP).set(f"layout:{cid}", data)
     return data
-
-
-def start_offset(cid: str, run_index: int) -> int:
-    """Index of the first LED of run ``run_index`` along the controller's strip."""
-    runs = get(cid)["runs"]
-    if not 0 <= run_index < len(runs):
-        raise Invalid("no such run")
-    return sum(r["leds"] for r in runs[:run_index])
 
 
 # ---------------------------------------------------------------- photos
 
 def _orig_name(cid):
+    # Pre-0.1.0b5 copy of the upload, kept so a restyled photo could be redone.
     return f"photos/{cid}.orig.jpg"
 
 
@@ -123,38 +111,38 @@ def _write(name: str, data: bytes) -> None:
     media.save(name, ContentFile(data))
 
 
-def _render(cid: str, look: str) -> None:
+def _restore_original(cid: str) -> None:
     media = app_media(APP)
+    if not media.exists(_orig_name(cid)):
+        return
     with media.open(_orig_name(cid), "rb") as fh:
-        img = stylize.load(fh.read())
-    _write(photo_name(cid), stylize.to_jpeg(stylize.render(img, look)))
+        _write(photo_name(cid), stylize.to_jpeg(stylize.load(fh.read())))
+    media.delete(_orig_name(cid))
 
 
-def upload_photo(cid: str, data: bytes, look: str | None = None, leds: int = 100) -> dict:
+def upload_photo(cid: str, data: bytes) -> dict:
     check_cid(cid)
-    current = get(cid, leds)
-    look = look or current.get("look") or "night"
-    if look not in stylize.LOOKS:
-        raise Invalid("look is night, original or drawing")
+    current = get(cid)
     try:
         img = stylize.load(data)
     except stylize.BadImage as exc:
         raise Invalid(str(exc)) from None
-    _write(_orig_name(cid), stylize.to_jpeg(img, quality=90))
-    _write(photo_name(cid), stylize.to_jpeg(stylize.render(img, look)))
-    data = dict(current, photo=True, look=look, v=int(current.get("v", 0)) + 1,
+    _write(photo_name(cid), stylize.to_jpeg(img))
+    if app_media(APP).exists(_orig_name(cid)):
+        app_media(APP).delete(_orig_name(cid))
+    data = dict(current, photo=True, v=int(current.get("v", 0)) + 1,
                 aspect=round(img.width / img.height, 4))
     app_state(APP).set(f"layout:{cid}", data)
     return data
 
 
-def remove_photo(cid: str, leds: int = 100) -> dict:
+def remove_photo(cid: str) -> dict:
     check_cid(cid)
     media = app_media(APP)
     for name in (_orig_name(cid), photo_name(cid)):
         if media.exists(name):
             media.delete(name)
-    data = dict(get(cid, leds), photo=False)
+    data = dict(get(cid), photo=False)
     data.pop("aspect", None)
     app_state(APP).set(f"layout:{cid}", data)
     return data

@@ -29,9 +29,6 @@ GUEST_LAST = dt.time(22, 0)
 GUEST_GRACE = dt.timedelta(minutes=15)
 DEFAULT_LEDS = 100
 MAX_COLORS = 20
-BLINK_LIGHTS = 10
-#: Seconds the start of a run blinks before the previous pattern comes back.
-BLINK_SECONDS = 10.0
 WARM_HEX = "#fff1e0"
 WARM_INT = 0xFF000000
 
@@ -621,34 +618,3 @@ def cleanup(now=None) -> int:
         pid = fp.pattern.id or fp.id
         cloud.write(lambda c, pid=pid: c.delete_pattern(folder_id, pid), invalidate=("ours",))
     return len(old)
-
-
-# ---------------------------------------------------------------- setup
-
-def blink(cid: str, start: int = 0, *, wait: bool = False):
-    """Light the first few LEDs from ``start`` so the admin can find the real start.
-
-    The previous pattern comes back after ``BLINK_SECONDS``. Returns the
-    restore thread (joined first when ``wait``).
-    """
-    from pygemstone import encode_lights
-
-    (cid,) = check_ids([cid])
-    leds = next(c["leds"] for c in controllers() if c["id"] == cid)
-    start = _clamp(start, 0, max(0, leds - 1), "start")
-    lights = encode_lights(range(start, min(leds, start + BLINK_LIGHTS)))
-    snapshot = _snapshot([cid])
-    cloud.write(lambda c: c.impulse(cid, lights), invalidate=(f"state:{cid}",))
-
-    def restore():
-        threading.Event().wait(BLINK_SECONDS)
-        try:
-            _restore(snapshot)
-        except Exception:  # noqa: BLE001 - background
-            logger.exception("Couldn't restore %s after blinking", cid)
-
-    t = threading.Thread(target=restore, name="gemstone-blink", daemon=True)
-    t.start()
-    if wait:
-        t.join()
-    return t
