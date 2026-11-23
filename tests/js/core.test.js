@@ -125,13 +125,15 @@ test('stripIndex: every colour of every pattern shows on a card strip', () => {
 });
 
 test('titleTidy: drops the animation the card already labels', () => {
-  assert.equal(core.titleTidy('Hungary - Motionless (copy)', 'motionless'), 'Hungary (copy)');
+  assert.equal(core.titleTidy('Hungary - Motionless (copy)', 'motionless'), 'Hungary');
   assert.equal(core.titleTidy('Slovenia - Wave', 'wave'), 'Slovenia');
   assert.equal(core.titleTidy('Motionless - Canucks', 'motionless'), 'Canucks');
   assert.equal(core.titleTidy('Candy Chase: chase', 'chase'), 'Candy Chase');
   assert.equal(core.titleTidy('Australia - Flag', 'motionless'), 'Australia - Flag');
   assert.equal(core.titleTidy('Motionless', 'motionless'), 'Motionless');
-  assert.equal(core.titleTidy('Wave (2)', 'wave'), 'Wave (2)');
+  assert.equal(core.titleTidy('Wave (2)', 'wave'), 'Wave');
+  assert.equal(core.titleTidy('Sunset (copy)', 'wave'), 'Sunset');
+  assert.equal(core.titleTidy('Untitled (1)', 'wave'), 'Untitled (1)');
   assert.equal(core.titleTidy('', 'wave'), 'Untitled');
   assert.equal(core.titleTidy(null), 'Untitled');
 });
@@ -149,6 +151,16 @@ test('nextUntitled: Untitled, then the first free (n), ignoring case and spaces'
   assert.equal(core.nextUntitled(['Sunset']), 'Untitled');
   assert.equal(core.nextUntitled([' untitled ']), 'Untitled (1)');
   assert.equal(core.nextUntitled(['Untitled', 'Untitled (1)', 'Untitled (3)']), 'Untitled (2)');
+});
+
+test('nextCopyName: Name 2, then the first free number, from the base name', () => {
+  assert.equal(core.nextCopyName('Sunset', ['Sunset']), 'Sunset 2');
+  assert.equal(core.nextCopyName('Sunset', ['Sunset', 'sunset 2']), 'Sunset 3');
+  assert.equal(core.nextCopyName('Sunset 2', ['Sunset', 'Sunset 2']), 'Sunset 3');
+  assert.equal(core.nextCopyName('Sunset 3', ['Sunset 3']), 'Sunset 2');
+  assert.equal(core.nextCopyName('Sunset (copy)', ['Sunset', 'Sunset (copy)']), 'Sunset 2');
+  assert.equal(core.nextCopyName('Wave (4)', []), 'Wave 2');
+  assert.equal(core.nextCopyName('', []), 'Untitled 2');
 });
 
 test('sameDesign: matches on animation and colours only', () => {

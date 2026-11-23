@@ -41,7 +41,11 @@
     try { r = await fetch(u, init); } catch (e) { throw new Error("Can't reach the hub"); }
     let j = {};
     try { j = await r.json(); } catch (e) { /* not JSON */ }
-    if (!r.ok) throw new Error(j.error || ('Something went wrong (' + r.status + ')'));
+    if (!r.ok) {
+      const err = new Error(j.error || ('Something went wrong (' + r.status + ')'));
+      err.status = r.status;
+      throw err;
+    }
     return j;
   }
   function fmtTime(d) {
@@ -79,6 +83,7 @@
   function openPop(anchor, build, cls) {
     pop.className = 'pop' + (cls ? ' ' + cls : '');
     pop.textContent = '';
+    pop._for = null;
     build(pop);
     pop.hidden = false;
     const r = anchor.getBoundingClientRect(), R = root.getBoundingClientRect();
@@ -158,7 +163,7 @@
   const photoUrl = (c) => url('photo', c.id) + '?v=' + ((c.layout && c.layout.v) || 0);
   const aspectOf = (lay) => (lay && lay.photo && lay.aspect > 0 ? lay.aspect : 2);
 
-  const { rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, sameDesign, dimOf } = window.GemstoneCore;
+  const { rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, sameDesign, dimOf } = window.GemstoneCore;
   function rgba(hex, a) {
     const v = parseInt(String(hex).slice(1), 16) || 0;
     return 'rgba(' + (v >> 16 & 255) + ',' + (v >> 8 & 255) + ',' + (v & 255) + ',' + a.toFixed(3) + ')';
@@ -496,29 +501,101 @@
     cv.width = 540; cv.height = 224; cv.style.objectFit = 'cover';
     pv.appendChild(cv); c.appendChild(pv);
     strip(cv, p, 1.3);
-    const tx = h('div', 'g-tx');
-    const fav = isFav(p);
-    const ht = h('button', 'g-ht' + (fav ? ' g-fav' : ''), fav ? '♥' : '♡');
-    ht.setAttribute('aria-label', fav ? 'Remove from favourites' : 'Add to favourites');
-    ht.setAttribute('aria-pressed', fav ? 'true' : 'false');
-    ht.onclick = (e) => { e.stopPropagation(); ht.classList.add('g-pop'); setFav(p, !isFav(p)); };
-    const nm = h('div', 'nm', titleTidy(p.name, p.animation));
-    nm.title = p.name;
-    nm.appendChild(h('span', 'an', pretty(p.animation || 'motionless')));
-    tx.append(ht, nm);
-    c.appendChild(tx);
     const first = selCtrls()[0];
     if (PV && !lightsOn() && PV.pat.id === p.id) {
-      c.classList.add('g-pvw'); c.appendChild(h('span', 'pl g-pvb', 'PREVIEW'));
+      c.classList.add('g-pvw'); pv.appendChild(h('span', 'pl g-pvb', 'PREVIEW'));
     } else if (first && first.state && first.state.on && first.state.pattern && first.state.pattern.id === p.id) {
-      c.classList.add('on'); c.appendChild(h('span', 'pl', 'LIVE'));
+      c.classList.add('on'); pv.appendChild(h('span', 'pl', 'LIVE'));
     }
-    const more = h('button', 'more', '⋯');
-    more.title = 'Open in Create';
-    more.onclick = (e) => { e.stopPropagation(); openCreate(p); };
-    c.appendChild(more);
-    c.onclick = () => playPattern(p);
+    const info = designInfo(p);
+    const cb = h('div', 'g-cb');
+    const nm = h('div', 'g-cn', titleTidy(p.name, p.animation));
+    nm.title = p.name;
+    const cm = h('div', 'g-cm'), cmt = h('div', 'g-cmt');
+    if (!info.stock && !opts.folder) {
+      const own = h('span', 'g-own' + (info.guest ? ' guest' : ''), info.guest ? '👤' : '🏠');
+      own.appendChild(h('span', 'g-ownl', info.guest ? ' Guest' : ' Custom'));
+      cmt.append(own, document.createTextNode(' · '));
+    }
+    cmt.appendChild(document.createTextNode(pretty(p.animation || 'motionless')));
+    cm.appendChild(cmt);
+    if (isFav(p) && !opts.favRow) {
+      const hp = h('span', 'g-hp', '♥');
+      hp.setAttribute('aria-label', 'Favourite');
+      cm.appendChild(hp);
+    }
+    const dots = h('button', 'g-dots', '⋯');
+    dots.setAttribute('aria-label', 'More options');
+    dots.setAttribute('data-pop', '');
+    dots.onclick = (e) => { e.stopPropagation(); if (!pop.hidden && pop._for === p.id) { closePop(); return; } openCardMenu(dots, p); };
+    cm.appendChild(dots);
+    cb.append(nm, cm);
+    c.appendChild(cb);
+    // Press and hold opens the same menu; the tap that ends it doesn't play.
+    let lpT = null, lpX = 0, lpY = 0, held = false;
+    const cancel = () => { clearTimeout(lpT); lpT = null; };
+    c.addEventListener('pointerdown', (e) => {
+      held = false;
+      if (e.button || e.target.closest('.g-dots')) return;
+      lpX = e.clientX; lpY = e.clientY;
+      cancel();
+      lpT = setTimeout(() => { lpT = null; held = true; openCardMenu(c, p); }, 500);
+    });
+    c.addEventListener('pointermove', (e) => { if (lpT && Math.hypot(e.clientX - lpX, e.clientY - lpY) > 10) cancel(); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => c.addEventListener(ev, cancel));
+    c.addEventListener('contextmenu', (e) => { if (held || lpT) e.preventDefault(); });
+    c.onclick = () => { if (held) { held = false; return; } playPattern(p); };
     return c;
+  }
+  // What a design is and what this user may do with it. Library patterns aren't in OURS: stock.
+  function designInfo(p) {
+    const mine = OURS && OURS.patterns.find((q) => q.id === p.id);
+    const stock = !mine || !!mine.stock;
+    const guest = !!(mine && mine.guest);
+    return { mine, stock, guest, canEdit: !stock && (S.admin || guest), canDelete: !stock && (S.admin || guest) };
+  }
+  function openCardMenu(anchor, p) {
+    const info = designInfo(p);
+    openPop(anchor, (m) => {
+      m._for = p.id;
+      const hd = h('div', 'g-cmh', p.name || 'Untitled');
+      if (!info.stock) hd.appendChild(h('small', '', info.guest ? 'Guest design' : 'Custom design'));
+      m.appendChild(hd);
+      m.appendChild(popItem(info.canEdit ? '✏️ Edit' : '✏️ Edit a copy', '', () => { closePop(); openCreate(p); }));
+      const fav = isFav(p);
+      m.appendChild(popItem(fav ? '♥ Remove from favourites' : '♡ Add to favourites', '', () => { closePop(); setFav(p, !fav); }));
+      if (info.canDelete) {
+        m.appendChild(h('hr'));
+        m.appendChild(popItem('🗑 Delete', 'g-cdel', () => deleteDesign(p)));
+      }
+    }, 'g-cmenu');
+  }
+  // Deletes straight away; the toast's Undo puts it back. The lights are left alone.
+  async function deleteDesign(p, then) {
+    closePop();
+    pending++;
+    try {
+      const r = await api(url('designDelete'), { id: p.id });
+      try { await loadOurs(true); } catch (e) { /* shown on the next refresh */ }
+      if (then) then();
+      toast(['Deleted “', { b: r.name || p.name }, '”'], false, { label: 'Undo', onTap: () => restoreDesign(r.token) });
+    } catch (e) {
+      if (e.status === 404) {
+        try { await loadOurs(true); } catch (e2) { /* shown on the next refresh */ }
+        if (then) then();
+        toast('Already deleted');
+      } else fail(e);
+    } finally { pending--; renderView(); if (!pending) refreshSoon(2000); }
+  }
+  async function restoreDesign(token) {
+    pending++;
+    try {
+      const r = await api(url('designRestore'), { token });
+      try { await loadOurs(true); } catch (e) { /* shown on the next refresh */ }
+      toast(['Restored ', { b: r.name || 'the design' }]);
+    } catch (e) {
+      fail(e.status === 404 ? new Error('Too late to undo') : e);
+    } finally { pending--; renderView(); if (!pending) refreshSoon(2000); }
   }
   function solidTile(name, hex) {
     const b = h('button', 'solid');
@@ -843,24 +920,24 @@
     } catch (e) { row.textContent = ''; row.appendChild(h('div', 'empty', e.message)); return; }
     if (view !== 'tonight') return;
     if (!pats.length) {
-      if (row._key !== 'empty') { row._key = 'empty'; row.textContent = ''; row.appendChild(h('div', 'empty', 'No favourites yet — tap ♡ on any pattern below.')); }
+      if (row._key !== 'empty') { row._key = 'empty'; row.textContent = ''; row.appendChild(h('div', 'empty', 'No favourites yet — tap ⋯ on any pattern below.')); }
       return;
     }
-    fillCards(row, orderGroup(pats, ORDER_PLAYS).slice(0, GROUP_PAGE));
+    fillCards(row, orderGroup(pats, ORDER_PLAYS).slice(0, GROUP_PAGE), '', { favRow: true });
   }
   // Only rebuild the cards when what they show has changed.
   function cardsKey(pats) {
     const first = selCtrls()[0], fs = (first && first.state) || {};
-    return JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors, isFav(p)]),
+    return JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors, isFav(p), !!p.stock, !!p.guest]),
       PV && !lightsOn() ? PV.pat.id : null, fs.on && fs.pattern ? fs.pattern.id : null]);
   }
-  function fillCards(el, pats, empty) {
-    const key = cardsKey(pats) + (empty || '');
+  function fillCards(el, pats, empty, opts) {
+    const key = cardsKey(pats) + (empty || '') + JSON.stringify(opts || {});
     if (el._key === key && el.children.length) return;
     el._key = key;
     // Swap in one go: an emptied grid would shrink the page and clamp its scroll for a frame.
     if (!pats.length && empty) { el.replaceChildren(h('div', 'empty', empty)); return; }
-    el.replaceChildren(...pats.map((p) => card(p)));
+    el.replaceChildren(...pats.map((p) => card(p, opts)));
   }
 
   // ------------------------------------------------------------ favourites (the ♡ on every card)
@@ -925,7 +1002,7 @@
       n.wrap.classList.toggle('closed', !open);
       if (!open) return;
       const lim = grpMore[g.key] || GROUP_PAGE;
-      fillCards(n.body, g.pats.slice(0, lim), g.empty);
+      fillCards(n.body, g.pats.slice(0, lim), g.empty, { folder: true });
       const left = g.pats.length - lim;
       n.more.hidden = left <= 0;
       if (left > 0) n.more.textContent = 'Show ' + Math.min(GROUP_PAGE, left) + ' more · ' + left + ' left';
@@ -1185,8 +1262,8 @@
     const folder = OURS && p.folder ? OURS.folders.find((f) => f.id === p.folder) : null;
     if (folder && !folder.managed && (S.admin || folder.guest)) {
       C.id = p.id; C.folder = { id: folder.id, name: folder.name };
-    } else if (S.admin && p.name) {
-      C.design.name = p.name + ' (copy)';
+    } else if (p.name) {
+      C.design.name = nextCopyName(p.name, OURS ? OURS.patterns.map((q) => q.name) : []);
     } else {
       C.design.name = untitled();
     }
@@ -1341,6 +1418,9 @@
     else { fb.append(document.createTextNode('🔒 📁 ' + S.guest_folder)); }
     fb.classList.toggle('locked', !S.admin);
     $('c-pname').textContent = t.textContent;
+    const del = $('c-del');
+    const mp = C.id && OURS && OURS.patterns.find((q) => q.id === C.id);
+    if (del) del.hidden = !C.id || !!(mp && mp.stock);
   }
   function renderCreate() {
     const list = selCtrls();
@@ -1413,6 +1493,13 @@
   makeSlider($('c-bright'), (v) => { C.design.brightness = Math.max(1, v); $('c-bval').textContent = C.design.brightness + '%'; }, () => changed());
   $('c-dir').querySelectorAll('span').forEach((s) => { s.onclick = () => { C.design.direction = +s.dataset.d; changed(); }; });
   $('c-new').onclick = () => { newDesign(); renderCreate(); };
+  $('c-del').onclick = () => {
+    if (!C.id) return;
+    // A save still on its way would bring the design straight back.
+    clearTimeout(C.saveT); C.again = false; C.dirty = false;
+    const p = (OURS && OURS.patterns.find((q) => q.id === C.id)) || { id: C.id, name: C.design.name };
+    deleteDesign(p, () => { newDesign(); location.hash = '#tonight'; });
+  };
   $('c-back').onclick = () => { location.hash = '#tonight'; };
   const title = $('c-title');
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
