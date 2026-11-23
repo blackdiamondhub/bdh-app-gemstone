@@ -68,6 +68,21 @@ function body(name) {
   return js.slice(j);
 }
 
+test('card menu: stock designs get no Delete, only deletable ones do', () => {
+  const info = body('designInfo');
+  assert.match(info, /const stock = !mine \|\| !!mine\.stock/, 'library patterns (not in OURS) are stock');
+  assert.match(info, /canDelete: !stock && \(S\.admin \|\| guest\)/);
+  const menu = body('openCardMenu');
+  assert.match(menu, /if \(info\.canDelete\) \{[^}]*Delete/, 'Delete is only added when allowed (hidden, not disabled)');
+  assert.ok(!/disabled|'dis'/.test(menu), 'unavailable items are hidden, not disabled');
+});
+
+test('ownership tag is hidden inside folder groups', () => {
+  assert.match(body('card'), /if \(!info\.stock && !opts\.folder\)/);
+  assert.match(body('fillGroups'), /fillCards\([^;]*\{ folder: true \}\)/);
+  assert.ok(!/folder: true/.test(body('renderRecent') + body('renderFavs')), 'Recent/Favourites show the tag');
+});
+
 test('no Admin/guest label in the rail', () => {
   assert.ok(!/gs-who/.test(js + html), 'gs-who is back');
   assert.ok(!/\.who\b/.test(css), '.who rules are back');

@@ -11,8 +11,12 @@ number of controllers.
   the Autopilot event, then every pattern on one scrolling page: a ♥ Favourites strip, **All
   patterns** (chips for each of your folders and for solid colours; the chips stay at the top
   while you scroll) and, folded away at the bottom, the Gemstone library patterns you haven't
-  saved. Tap ♡ on any card to make it a favourite (a library pattern is saved into your folder as
-  it does). Tapping a card plays it without moving the page; once the big picture has scrolled
+  saved. Each card's ⋯ menu (or a long press) offers Edit / Edit a copy, add to or remove from
+  favourites (a library pattern is saved into your folder as it does) and, for your own designs,
+  Delete — it happens at once with an Undo toast for a few seconds; library and Gemstone-managed
+  patterns can't be deleted, and guests can only delete Guest designs. Outside folder groups,
+  cards tag 🏠 Custom and 👤 Guest designs. Copies are named "Sunset 2", "Sunset 3", ….
+  Tapping a card plays it without moving the page; once the big picture has scrolled
   away a slim now-playing bar with the same Lights switch and brightness stays at the top, its
   picture zoomed so every light is in view. `#patterns` links open Tonight at All patterns.
 - **Create** — pick colours, an animation, speed, brightness and direction. Designs save

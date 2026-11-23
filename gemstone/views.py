@@ -34,6 +34,8 @@ def _guarded(fn):
             return _error("Gemstone isn't set up yet — an admin needs to enter the account in Settings", 409)
         except (service.Forbidden, PermissionError) as exc:
             return _error(exc, 403)
+        except service.NotFound as exc:
+            return _error(exc, 404)
         except (service.Invalid, layout.Invalid) as exc:
             return _error(exc, 400)
         except cloud.CloudError as exc:
@@ -208,6 +210,18 @@ def design(request):
                               folder_id=b.get("folder", "") if admin else "",
                               name=b.get("name", ""))
     return JsonResponse(out)
+
+
+@require_POST
+@_guarded
+def design_delete(request):
+    return JsonResponse(service.delete_design(_body(request).get("id"), admin=is_admin(request)))
+
+
+@require_POST
+@_guarded
+def design_restore(request):
+    return JsonResponse(service.restore_design(_body(request).get("token", "")))
 
 
 @require_POST

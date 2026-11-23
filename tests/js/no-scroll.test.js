@@ -81,15 +81,15 @@ function reachable(starts) {
   return seen;
 }
 
-// What a card / solid tile / heart tap runs (not ⋯, which opens Create).
+// What a card / solid tile tap runs (not ⋯, which opens the card menu), plus the menu's favourite toggle.
 function tapEntries() {
   let code = '';
   for (const fn of ['card', 'solidTile']) {
     const body = FNS.get(fn), re = /(\w+)\.onclick\s*=/g;
     let m;
-    while ((m = re.exec(body))) if (m[1] !== 'more') code += body.slice(m.index, stmtEnd(body, m.index + m[0].length)) + '\n';
+    while ((m = re.exec(body))) if (m[1] !== 'dots') code += body.slice(m.index, stmtEnd(body, m.index + m[0].length)) + '\n';
   }
-  return [...FNS.keys()].filter((n) => new RegExp('\\b' + n + '\\b').test(code));
+  return [...FNS.keys()].filter((n) => new RegExp('\\b' + n + '\\b').test(code)).concat(['setFav']);
 }
 
 test('the parser finds the play path', () => {

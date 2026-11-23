@@ -1029,6 +1029,87 @@ class ViewTests(Fresh, TestCase):
         self.assertEqual(self.post("gemstone_fav", {"fav": True}).status_code, 400)
         self.assertEqual(self.client.get(reverse("gemstone_fav")).status_code, 405)
 
+    def delete(self, pid):
+        return self.post("gemstone_design_delete", {"id": pid})
+
+    def guest_design(self):
+        return self.post("gemstone_design", {"pattern": {"colors": ["#ff0000"]}, "name": "Mine"}).json()["id"]
+
+    @patch("gemstone.views.is_admin", return_value=True)
+    def test_admin_deletes_a_custom_design(self, _admin):
+        r = self.delete("p-ours")
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((r.json()["ok"], r.json()["name"]), (True, "Sunset"))
+        self.assertTrue(r.json()["token"])
+        self.assertEqual(self.fake.ops("delete_pattern"), [("f-ours", "p-ours")])
+        self.assertNotIn("p-ours", self.ours())
+        entry = service.activity()[0]
+        self.assertEqual((entry["action"], entry["design"], entry["name"]), ("delete", "p-ours", "Sunset"))
+
+    def test_admin_deletes_a_guest_design(self):
+        pid = self.guest_design()
+        with patch("gemstone.views.is_admin", return_value=True):
+            self.assertEqual(self.delete(pid).status_code, 200)
+        self.assertNotIn(pid, self.ours())
+
+    def test_guest_deletes_guest_designs_only(self):
+        pid = self.guest_design()
+        self.assertTrue(self.ours()[pid]["guest"])
+        self.assertFalse(self.ours()["p-ours"]["guest"])
+        self.assertEqual(self.delete(pid).status_code, 200)
+        self.assertNotIn(pid, self.ours())
+        self.assertEqual(self.delete("p-ours").status_code, 403)
+        self.assertIn("p-ours", self.ours())
+
+    def test_gemstone_patterns_cannot_be_deleted(self):
+        managed = pat(str(uuid.uuid4()), "Holly")
+        self.fake.fps.append(FakeGemstone._fp("f-gem", managed, NOW))
+        self.client.get(reverse("gemstone_library"))
+        with patch("gemstone.views.is_admin", return_value=True):
+            self.fav("p-lib")
+            mine = self.ours()
+            self.assertTrue(mine[managed["id"]]["stock"])
+            self.assertTrue(mine["p-lib"]["stock"])
+            self.assertFalse(mine["p-ours"]["stock"])
+            self.assertEqual(self.delete(managed["id"]).status_code, 403)
+            self.assertEqual(self.delete("p-lib").status_code, 403)
+        self.assertEqual(self.fake.ops("delete_pattern"), [])
+
+    def test_delete_missing_design(self):
+        with patch("gemstone.views.is_admin", return_value=True):
+            self.assertEqual(self.delete(str(uuid.uuid4())).status_code, 404)
+            self.assertEqual(self.post("gemstone_design_delete", {}).status_code, 400)
+        self.assertEqual(self.client.get(reverse("gemstone_design_delete")).status_code, 405)
+
+    @patch("gemstone.views.is_admin", return_value=True)
+    def test_deleting_the_live_design_leaves_the_lights_alone(self, _admin):
+        self.post("gemstone_play", {"ids": ["house"], "pattern": {"id": "p-ours"}})
+        self.fake.writes.clear()
+        self.assertEqual(self.delete("p-ours").status_code, 200)
+        self.assertEqual([w[0] for w in self.fake.writes], ["delete_pattern"])
+        self.assertTrue(self.fake.states["house"]["onState"])
+
+    @patch("gemstone.views.is_admin", return_value=True)
+    def test_restore_puts_it_back_with_its_heart(self, _admin):
+        self.fav("p-ours")
+        token = self.delete("p-ours").json()["token"]
+        self.assertNotIn("p-ours", self.ours())
+        r = self.post("gemstone_design_restore", {"token": token})
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual((r.json()["id"], r.json()["name"]), ("p-ours", "Sunset"))
+        back = self.ours()["p-ours"]
+        self.assertEqual((back["folder"], back["fav"], back["name"]), ("f-ours", True, "Sunset"))
+        self.assertEqual(self.fake.ops("save_pattern")[-1], ("f-ours", "p-ours", "Sunset"))
+        self.assertEqual(service.activity()[0]["action"], "restore")
+        self.assertEqual(self.post("gemstone_design_restore", {"token": token}).status_code, 404)
+        self.assertEqual(self.post("gemstone_design_restore", {"token": "nope"}).status_code, 404)
+
+    def test_restore_expires(self):
+        pid = self.guest_design()
+        token = self.delete(pid).json()["token"]
+        with patch.object(service.time, "monotonic", return_value=time.monotonic() + service.DELETE_UNDO_SECONDS + 1):
+            self.assertEqual(self.post("gemstone_design_restore", {"token": token}).status_code, 404)
+
 
 class HomepageTests(Fresh, TestCase):
     def test_status(self):

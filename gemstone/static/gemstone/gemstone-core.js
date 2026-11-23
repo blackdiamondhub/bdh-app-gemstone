@@ -100,8 +100,9 @@
     return Math.floor((j + 0.5) * band * k / n);
   }
 
-  // A card title without the animation it already shows as a label:
-  // "Hungary - Motionless (copy)" -> "Hungary (copy)", "Motionless - Canucks" -> "Canucks".
+  // A card title without the animation it already shows as a label or an old copy suffix:
+  // "Hungary - Motionless (copy)" -> "Hungary", "Motionless - Canucks" -> "Canucks".
+  // "Untitled (n)" keeps its number: it's the only thing telling those designs apart.
   const ALIASES = { motionless: ['motionless', 'solid', 'static', 'still'] };
   function titleTidy(name, animation) {
     const full = String(name || '').trim();
@@ -117,7 +118,7 @@
       const next = core.replace(suffix, '').replace(prefix, '').trim();
       if (next) core = next;
     }
-    return core + (copy ? copy[0] : '');
+    return core + (copy && /^untitled$/i.test(core) ? copy[0] : '');
   }
 
   // Patterns in the order a group shows them: most played here (then most
@@ -140,6 +141,17 @@
     for (let i = 1; ; i++) if (!taken.has('untitled (' + i + ')')) return 'Untitled (' + i + ')';
   }
 
+  // The name for a copy of ``name``: "Sunset" -> "Sunset 2", then "Sunset 3"... (first free,
+  // ignoring case). A copy of "Sunset 2" or the old "Sunset (copy)" / "Sunset (1)" counts from "Sunset".
+  function nextCopyName(name, names) {
+    let base = String(name || '').trim().replace(/\s*\((copy|\d+)\)$/i, '').trim();
+    const num = /^(.*\S)\s+\d+$/.exec(base);
+    if (num) base = num[1];
+    if (!base) base = 'Untitled';
+    const taken = new Set((names || []).map((n) => String(n || '').trim().toLowerCase()));
+    for (let i = 2; ; i++) if (!taken.has((base + ' ' + i).toLowerCase())) return base + ' ' + i;
+  }
+
   // Whether the lights' pattern is still the design pushed from Create, or someone changed it.
   // Name and brightness are ignored: the cloud may rename it and brightness is a live slider.
   function sameDesign(pattern, spec) {
@@ -157,7 +169,8 @@
   }
 
   const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, heroHidden, GUEST_LAST, NIGHT_ENDS,
-    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, sameDesign, dimOf };
+    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, sameDesign,
+    dimOf };
   root.GemstoneCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

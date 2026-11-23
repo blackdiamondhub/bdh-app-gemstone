@@ -12,6 +12,7 @@ import datetime as dt
 import logging
 import re
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -350,7 +351,23 @@ def ours() -> dict:
                                       created=fp.created_at.isoformat() if fp.created_at else None)
                          for fp in pats],
         }
-    return cloud.read("ours", 60, fetch)
+    return _mark_owners(cloud.read("ours", 60, fetch))
+
+
+def _lib_ids() -> set[str]:
+    return set(app_state(APP).get("lib_ids") or [])
+
+
+def _mark_owners(data: dict) -> dict:
+    """Tag each saved pattern ``stock`` (Gemstone's: a managed folder or a hearted
+    library copy, which keeps the library id) or ``guest`` (in Guest designs)."""
+    folders = {f["id"]: f for f in data["folders"]}
+    lib = _lib_ids()
+    pats = []
+    for p in data["patterns"]:
+        f = folders.get(p.get("folder")) or {}
+        pats.append(dict(p, stock=bool(f.get("managed")) or p["id"] in lib, guest=bool(f.get("guest"))))
+    return dict(data, patterns=pats)
 
 
 def library() -> list[dict]:
@@ -374,6 +391,8 @@ def library() -> list[dict]:
                                         downloads=int(getattr(d, "downloads", 0) or 0)))
             if not fresh:
                 break
+        # Remembered so a hearted library copy (same id, in our folder) counts as stock.
+        app_state(APP).set("lib_ids", [p["id"] for p in out])
         return out
     return cloud.read("library", 6 * 3600, fetch)
 
@@ -1274,6 +1293,63 @@ def set_favorite(pattern_id, fav, *, admin: bool) -> dict:
     pattern = _pattern_cls().from_api(raw)
     cloud.write(lambda c: c.save_pattern(folder_id, pattern, is_favorite=fav), invalidate=("ours",))
     return {"id": pid, "fav": fav, "folder": folder_id, "saved": mine is None, "name": pattern.name}
+
+
+class NotFound(LookupError):
+    """The design (or undo token) isn't there any more (404)."""
+
+
+DELETE_UNDO_SECONDS = 5 * 60
+_deleted_undo: dict[str, dict] = {}  # token -> {"raw", "folder", "fav", "at"}
+_deleted_lock = threading.Lock()
+
+
+def delete_design(design_id, *, admin: bool) -> dict:
+    """Delete a user-made design, keeping it briefly so it can be restored.
+
+    Gemstone's own patterns (managed folders, hearted library copies) can't be
+    deleted. Admins can delete any other design; guests only Guest designs.
+    The lights are left alone even if the design is playing.
+    """
+    pid = str(design_id or "")
+    if not _ID.match(pid):
+        raise Invalid("design id missing")
+    mine = _design(pid)
+    if mine is None:
+        raise NotFound("that design is already gone")
+    if mine.get("stock"):
+        raise Forbidden("Gemstone's own patterns can't be deleted")
+    folder_id = mine["folder"]
+    if not admin and folder_id != guest_folder_id(create=False):
+        raise Forbidden("guests can only delete guest designs")
+    with _known_lock:
+        raw = copy.deepcopy(_known.get(pid)) or {}
+    if not raw:
+        raise NotFound("that design is already gone")
+    name = mine.get("name") or raw.get("name") or "Untitled"
+    cloud.write(lambda c: c.delete_pattern(folder_id, pid), invalidate=("ours",))
+    token = uuid.uuid4().hex
+    now = time.monotonic()
+    with _deleted_lock:
+        for t in [t for t, v in _deleted_undo.items() if now - v["at"] > DELETE_UNDO_SECONDS]:
+            del _deleted_undo[t]
+        _deleted_undo[token] = {"raw": raw, "folder": folder_id, "fav": bool(mine.get("fav")), "at": now}
+    log_command("delete", [], design=pid, name=name)
+    return {"ok": True, "token": token, "name": name}
+
+
+def restore_design(token) -> dict:
+    """Put back a design :func:`delete_design` removed (within a few minutes)."""
+    with _deleted_lock:
+        item = _deleted_undo.pop(str(token or ""), None)
+    if item is None or time.monotonic() - item["at"] > DELETE_UNDO_SECONDS:
+        raise NotFound("too late to undo that")
+    pattern = _pattern_cls().from_api(copy.deepcopy(item["raw"]))
+    folder_id, fav = item["folder"], item["fav"]
+    cloud.write(lambda c: c.save_pattern(folder_id, pattern, is_favorite=fav), invalidate=("ours",))
+    _remember(item["raw"])
+    log_command("restore", [], design=pattern.id, name=pattern.name)
+    return {"ok": True, "id": pattern.id, "name": pattern.name}
 
 
 def cleanup(now=None) -> int:
