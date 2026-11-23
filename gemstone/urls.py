@@ -16,6 +16,7 @@ urlpatterns = [
     path("api/until/", views.until, name="gemstone_until"),
     path("api/schedule/", views.schedule, name="gemstone_schedule"),
     path("api/autopilot/", views.autopilot_api, name="gemstone_autopilot_api"),
+    path("api/activity/", views.activity, name="gemstone_activity"),
     path("api/design/", views.design, name="gemstone_design"),
     path("api/live/", views.live, name="gemstone_live"),
     path("api/fav/", views.fav, name="gemstone_fav"),

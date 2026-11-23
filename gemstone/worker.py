@@ -1,5 +1,6 @@
 """Background worker: turns lights off at "keep on until", keeps them off on a
-"lights off tonight" night, and cleans up guest designs daily."""
+"lights off tonight" night, makes sure Autopilot's lights went off at its off
+time, and cleans up guest designs daily."""
 import datetime as dt
 import logging
 import os
@@ -79,6 +80,10 @@ def tick(now=None):
         service.enforce_dark(now)
     except Exception:  # noqa: BLE001
         log.exception("lights-off-tonight check failed")
+    try:
+        service.enforce_autopilot_off(now)
+    except Exception:  # noqa: BLE001
+        log.exception("autopilot off-time check failed")
     try:
         run_cleanup(now)
     except Exception:  # noqa: BLE001

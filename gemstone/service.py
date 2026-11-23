@@ -6,6 +6,7 @@ account's real controllers, and sends one write per controller through
 """
 from __future__ import annotations
 
+import contextvars
 import copy
 import datetime as dt
 import logging
@@ -58,6 +59,54 @@ class Invalid(ValueError):
 
 class Forbidden(PermissionError):
     """Guests can't do this (403)."""
+
+
+# ---------------------------------------------------------------- activity log
+#
+# Every command sent to the lights is remembered here (in app state, so it
+# survives restarts and updates), with who sent it, so a night where the
+# lights did something odd can be explained the next morning.
+
+#: "admin" or "guest" for a request, set by the views; unset for the worker.
+actor: contextvars.ContextVar[str | None] = contextvars.ContextVar("gemstone_actor", default=None)
+ACTIVITY_KEEP = 300
+#: Repeats of the same command on the same lights this close together are one entry.
+ACTIVITY_MERGE = dt.timedelta(minutes=2)
+_activity_lock = threading.Lock()
+
+
+def log_command(action: str, ids, now=None, **detail) -> None:
+    """Remember a light command. Never fails the command it describes."""
+    ids = list(ids)
+    try:
+        now = now or dt.datetime.now(dt.timezone.utc)
+        entry = {"at": now.isoformat(), "action": action, "ids": ids}
+        if actor.get():
+            entry["by"] = actor.get()
+        entry.update({k: v for k, v in detail.items() if v is not None})
+        with _activity_lock:
+            store = app_state(APP)
+            items = list(store.get("activity") or [])
+            last = items[-1] if items else None
+            if (last and all(last.get(k) == entry.get(k) for k in ("action", "ids", "by"))
+                    and now - dt.datetime.fromisoformat(last.get("last") or last["at"]) <= ACTIVITY_MERGE):
+                last.update({k: v for k, v in entry.items() if k != "at"},
+                            n=int(last.get("n", 1)) + 1, last=now.isoformat())
+            else:
+                items.append(entry)
+            store.set("activity", items[-ACTIVITY_KEEP:])
+    except Exception:  # noqa: BLE001
+        logger.exception("Couldn't record %s on %s", action, ids)
+
+
+def activity() -> list[dict]:
+    """The activity log, newest first, with controller names."""
+    items = list(app_state(APP).get("activity") or [])
+    try:
+        by_id = {c["id"]: c["name"] for c in controllers()}
+    except Exception:  # noqa: BLE001 - the log is still useful without names
+        by_id = {}
+    return [dict(e, names=[by_id.get(i, i) for i in e.get("ids", [])]) for e in reversed(items)]
 
 
 # ---------------------------------------------------------------- colours
@@ -378,6 +427,7 @@ def play(ids, ref) -> dict:
     pattern = _resolve(ref)
     snapshot = _snapshot(ids)
     _play(ids, pattern)
+    log_command("play", ids, pattern=pattern.name)
     _end_dark()
     record_play(getattr(pattern, "id", None))
     return {"undo": _keep_undo(snapshot), "name": pattern.name, "on": names(ids)}
@@ -413,6 +463,7 @@ def undo(token: str) -> dict:
     if snapshot is None:
         raise Invalid("nothing to undo")
     _restore(snapshot)
+    log_command("undo", [s["id"] for s in snapshot])
     return {"restored": [s["id"] for s in snapshot]}
 
 
@@ -426,6 +477,7 @@ def live(ids, spec, *, start: bool = False) -> dict:
     pattern = pattern_from_spec(spec, pattern_id=str(uuid.uuid4()))
     snapshot = _snapshot(ids) if start else None
     _play(ids, pattern)
+    log_command("live", ids, pattern=pattern.name or None)
     _end_dark()
     out = {"on": names(ids)}
     if snapshot is not None:
@@ -437,6 +489,7 @@ def power(ids, on: bool, *, admin: bool, now=None) -> dict:
     ids = check_ids(ids)
     for cid in ids:
         cloud.write(lambda c, cid=cid: c.set_on_state(cid, bool(on)), invalidate=(f"state:{cid}",))
+    log_command("on" if on else "off", ids)
     if on:
         _end_dark()
     if on and not admin:
@@ -447,19 +500,27 @@ def power(ids, on: bool, *, admin: bool, now=None) -> dict:
 
 
 def brightness(ids, pct) -> dict:
-    """Replay each controller's current pattern at ``pct`` percent."""
+    """Replay each controller's current pattern at ``pct`` percent.
+
+    Controllers that are off are left off: replaying a pattern turns a
+    controller on, and a brightness nudge mustn't do that.
+    """
     ids = check_ids(ids)
-    level = round(_clamp(pct, 1, 100, "brightness") * 255 / 100)
+    pct = _clamp(pct, 1, 100, "brightness")
+    level = round(pct * 255 / 100)
     Pattern = _pattern_cls()
     changed = []
     for cid in ids:
-        raw = state(cid)["raw"]
-        if not raw:
+        current = state(cid)
+        raw = current["raw"]
+        if not raw or not current["on"]:
             continue
         raw = dict(raw, brightness=level)
         cloud.write(lambda c, cid=cid, raw=raw: c.play_pattern(cid, Pattern.from_api(raw)),
                     invalidate=(f"state:{cid}",))
         changed.append(cid)
+    if changed:
+        log_command("brightness", changed, level=round(pct))
     return {"brightness": level, "changed": changed}
 
 
@@ -550,6 +611,7 @@ def enforce_until(now=None) -> bool:
         except cloud.CloudError:
             logger.warning("Couldn't turn %s off at the time limit; will retry", cid)
             return False
+    log_command("off", current["ids"], source="keep on until")
     app_state(APP).delete("until")
     return True
 
@@ -795,6 +857,7 @@ def set_dark(on: bool, now=None) -> dict | None:
     ids = [c["id"] for c in controllers()]
     for cid in ids:
         cloud.write(lambda c, cid=cid: c.set_on_state(cid, False), invalidate=(f"state:{cid}",))
+    log_command("off", ids, source="lights off tonight")
     _drop_until(ids)
     return value
 
@@ -821,10 +884,75 @@ def enforce_dark(now=None) -> bool:
             if not state(cid)["on"]:
                 continue
             cloud.write(lambda cl, cid=cid: cl.set_on_state(cid, False), invalidate=(f"state:{cid}",))
+            log_command("off", [cid], source="lights off tonight")
             did = True
         except cloud.CloudError:
             logger.warning("Couldn't keep %s off for the night; will retry", cid)
     return did
+
+
+# --- autopilot off-time backstop
+#
+# Gemstone's cloud turns Autopilot's lights off at the off time, but not
+# always: a controller sent a command during the evening (a slider nudge, a
+# pattern) can be skipped and left on all night. So once the off time has
+# passed, anything Autopilot drives that's still on gets turned off here.
+
+#: How long after the off time to check, so Gemstone gets to do it first.
+AUTOPILOT_OFF_GRACE = dt.timedelta(minutes=3)
+
+
+def _autopilot_off_due(s, now) -> tuple[dt.date, dt.datetime] | None:
+    """(night, when to check) for tonight's off time, or None if it can't be worked out."""
+    w = s.schedule
+    try:
+        off = _hhmm(getattr(w, "off_time", None))
+    except Invalid:
+        return None
+    night = now.date() if now.time() >= NIGHT_ENDS else now.date() - dt.timedelta(days=1)
+    day = night + dt.timedelta(days=1) if off < NIGHT_ENDS else night
+    at = dt.datetime.combine(day, off, tzinfo=now.tzinfo)
+    return night, at + dt.timedelta(minutes=getattr(w, "off_offset_minutes", 0) or 0) + AUTOPILOT_OFF_GRACE
+
+
+def enforce_autopilot_off(now=None) -> list[str]:
+    """Once a night, after Autopilot's off time, turn off its controllers that are still on.
+
+    Lights under an active "keep on until" are left to that. Returns the ids turned off.
+    """
+    now = _local_now(now)
+    s = _settings()
+    known = {c["id"] for c in controllers()}
+    ids = [cid for cid in s.device_ids if cid in known]
+    due = _autopilot_off_due(s, now) if ids else None
+    if due is None:
+        return []
+    night, at = due
+    morning = dt.datetime.combine(night + dt.timedelta(days=1), NIGHT_ENDS, tzinfo=now.tzinfo)
+    store = app_state(APP)
+    if not at <= now < morning or store.get("autopilot_off_last") == night.isoformat():
+        return []
+    current = until()
+    kept = set(current["ids"]) if current and dt.datetime.fromisoformat(current["at"]) > now else set()
+    done = []
+    for cid in ids:
+        if cid in kept:
+            continue
+        try:
+            if not state(cid)["on"]:
+                continue
+            cloud.write(lambda c, cid=cid: c.set_on_state(cid, False), invalidate=(f"state:{cid}",))
+        except cloud.CloudError:
+            logger.warning("Couldn't turn %s off after Autopilot's off time; will retry", cid)
+            if done:
+                log_command("off", done, source="autopilot backstop")
+            return done
+        done.append(cid)
+    if done:
+        logger.info("Autopilot left %s on after its off time; turned off", done)
+        log_command("off", done, source="autopilot backstop")
+    store.set("autopilot_off_last", night.isoformat())
+    return done
 
 
 # --- the schedule
@@ -938,6 +1066,9 @@ def _apply_schedule(s, *, on_offset=None, off_time=None, admin: bool, now=None) 
 
 def _save(s) -> None:
     cloud.write(lambda c: c.update_events_settings(s), invalidate=("autopilot:",))
+    w = s.schedule
+    log_command("autopilot", list(s.device_ids), off=getattr(w, "off_time", None),
+                on_offset=getattr(w, "on_offset_minutes", None))
 
 
 def set_schedule(*, on_offset=None, off_time=None, dark_tonight=None, admin: bool, now=None) -> dict:

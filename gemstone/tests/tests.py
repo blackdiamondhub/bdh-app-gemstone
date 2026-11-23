@@ -309,7 +309,17 @@ class ServiceTests(Fresh, TestCase):
         out = service.brightness(["house", "tub"], 50)
         self.assertEqual(out["brightness"], 128)
         self.assertEqual(self.fake.states["house"]["pattern"]["brightness"], 128)
-        self.assertEqual(out["changed"], ["house", "tub"])
+        self.assertEqual(out["changed"], ["house"])
+
+    def test_brightness_never_turns_lights_on(self):
+        """The slider replayed the pattern on every selected light, turning on ones that were off."""
+        service.brightness(["house", "tub"], 30)
+        self.assertFalse(self.fake.states["tub"]["onState"])
+        self.assertEqual([a[0] for a in self.fake.ops("play")], ["house"])
+        self.fake.states["house"]["onState"] = False
+        cloud.forget("state:")
+        self.assertEqual(service.brightness(["house", "tub"], 60)["changed"], [])
+        self.assertEqual(len(self.fake.ops("play")), 1)
 
     def test_colour_round_trip(self):
         for color in ("#ff0000", "#00ff00", "#0000ff", "#123456", service.WARM_HEX):
@@ -426,11 +436,149 @@ class WorkerTests(Fresh, TestCase):
         worker.tick(self.local(20))
         self.assertFalse(self.fake.states["house"]["onState"])
 
+    def test_tick_turns_autopilot_lights_off_after_its_off_time(self):
+        self.fake.states["house"]["onState"] = True
+        cloud.forget("state:")
+        worker.tick(self.local(21, 5))
+        self.assertFalse(self.fake.states["house"]["onState"])
+
     def test_should_start(self):
         self.assertTrue(worker.should_start(["/x/bdh_sdk/runtime/__main__.py"]))
         self.assertFalse(worker.should_start(["manage.py", "test"]))
         with patch.dict("os.environ", {"BDH_GEMSTONE_WORKER": "0"}):
             self.assertFalse(worker.should_start(["/x/bdh_sdk/runtime/__main__.py"]))
+
+
+class AutopilotBackstopTests(Fresh, TestCase):
+    """The hot tub stayed on all night: Gemstone skipped a controller sent a command
+    during the evening. Autopilot (fake: off at 21:00, drives "house") must still go off."""
+
+    def turn_on(self, *ids):
+        for cid in ids:
+            self.fake.states[cid]["onState"] = True
+        cloud.forget("state:")
+
+    def offs(self):
+        return [a for a in self.fake.ops("on") if a[1] is False]
+
+    def test_whatever_was_sent_in_the_evening_goes_off(self):
+        sends = {
+            "play": lambda: service.play(["house"], {"kind": "solid", "color": "#00ff00"}),
+            "live": lambda: service.live(["house"], {"colors": ["#ff0000"], "animation": "starry"}),
+            "brightness": lambda: service.brightness(["house"], 40),
+            "power": lambda: service.power(["house"], True, admin=True),
+            "guest power": lambda: service.power(["house"], True, admin=False, now=self.local(19)),
+        }
+        for day, (name, send) in enumerate(sends.items()):
+            with self.subTest(name):
+                self.turn_on("house")
+                service._drop_until(["house"])
+                send()
+                cloud.forget("state:")
+                night = self.local(21, 10) + dt.timedelta(days=day)
+                self.assertEqual(service.enforce_autopilot_off(night), ["house"])
+                self.assertFalse(self.fake.states["house"]["onState"])
+
+    def test_only_autopilot_lights_and_only_after_the_off_time(self):
+        self.turn_on("house", "tub")
+        self.assertEqual(service.enforce_autopilot_off(self.local(20, 59)), [])
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 1)), [])  # Gemstone goes first
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 3)), ["house"])
+        self.assertTrue(self.fake.states["tub"]["onState"])
+
+    def test_once_a_night(self):
+        self.turn_on("house")
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 5)), ["house"])
+        self.turn_on("house")  # someone wants them back on: that's fine
+        self.assertEqual(service.enforce_autopilot_off(self.local(22)), [])
+        self.assertEqual(service.enforce_autopilot_off(self.local(5, 30) + dt.timedelta(days=1)), [])
+        self.assertTrue(self.fake.states["house"]["onState"])
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 5) + dt.timedelta(days=1)), ["house"])
+
+    def test_already_off_writes_nothing(self):
+        self.fake.states["house"]["onState"] = False
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 5)), [])
+        self.assertEqual(self.offs(), [])
+
+    def test_keep_on_until_wins(self):
+        service.power(["house"], True, admin=False, now=self.local(20, 30))
+        self.assertGreater(dt.datetime.fromisoformat(service.until()["at"]), self.local(21, 5))
+        cloud.forget("state:")
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 5)), [])
+        self.assertTrue(self.fake.states["house"]["onState"])
+
+    def test_autopilot_off(self):
+        self.fake.events_raw["deviceIds"] = []
+        self.turn_on("house")
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 30)), [])
+
+    def test_off_time_past_midnight(self):
+        self.fake.events_raw["schedule"]["offTime"] = "00:30"
+        self.turn_on("house")
+        self.assertEqual(service.enforce_autopilot_off(self.local(23, 50)), [])
+        next_day = dt.timedelta(days=1)
+        self.assertEqual(service.enforce_autopilot_off(self.local(0, 20) + next_day), [])
+        self.assertEqual(service.enforce_autopilot_off(self.local(0, 40) + next_day), ["house"])
+
+    def test_not_after_morning(self):
+        self.turn_on("house")
+        self.assertEqual(service.enforce_autopilot_off(self.local(7) + dt.timedelta(days=1)), [])
+
+    def test_retries_after_a_cloud_error(self):
+        self.turn_on("house")
+        with patch.object(cloud, "write", side_effect=cloud.CloudError("down")):
+            self.assertEqual(service.enforce_autopilot_off(self.local(21, 5)), [])
+        self.assertEqual(service.enforce_autopilot_off(self.local(21, 6)), ["house"])
+
+    def test_logged(self):
+        self.turn_on("house")
+        service.enforce_autopilot_off(self.local(21, 5))
+        entry = service.activity()[0]
+        self.assertEqual((entry["action"], entry["ids"], entry["source"], entry["names"]),
+                         ("off", ["house"], "autopilot backstop", ["House"]))
+        self.assertNotIn("by", entry)
+
+
+class ActivityTests(Fresh, TestCase):
+    def post(self, name, body):
+        return self.client.post(reverse(name), body, content_type="application/json")
+
+    def test_every_command_is_logged_with_who_sent_it(self):
+        self.post("gemstone_play", {"ids": ["house", "tub"], "pattern": {"kind": "solid", "color": "#00ff00"}})
+        self.post("gemstone_power", {"ids": ["tub"], "on": False})
+        with patch("gemstone.views.is_admin", return_value=True):
+            self.post("gemstone_brightness", {"ids": ["house"], "brightness": 40})
+        got = [(e["action"], e["ids"], e.get("by")) for e in service.activity()]
+        self.assertEqual(got, [("brightness", ["house"], "admin"), ("off", ["tub"], "guest"),
+                               ("play", ["house", "tub"], "guest")])
+        self.assertIsNone(service.actor.get())
+
+    def test_repeats_merge(self):
+        for pct in (20, 30, 40):
+            service.brightness(["house"], pct)
+        log = service.activity()
+        self.assertEqual(len(log), 1)
+        self.assertEqual((log[0]["n"], log[0]["level"]), (3, 40))
+        service.log_command("brightness", ["house"], now=dt.datetime.now(UTC) + dt.timedelta(minutes=5))
+        self.assertEqual(len(service.activity()), 2)
+
+    def test_capped(self):
+        for i in range(service.ACTIVITY_KEEP + 5):
+            service.log_command("on", [f"c{i}"])
+        log = service.activity()
+        self.assertEqual(len(log), service.ACTIVITY_KEEP)
+        self.assertEqual(log[0]["ids"], [f"c{service.ACTIVITY_KEEP + 4}"])
+
+    def test_never_breaks_the_command(self):
+        with patch.object(service, "app_state", side_effect=RuntimeError("db")):
+            service.log_command("on", ["house"])
+
+    def test_endpoint_is_admin_only(self):
+        service.log_command("on", ["house"])
+        self.assertEqual(self.client.get(reverse("gemstone_activity")).status_code, 403)
+        with patch("gemstone.views.is_admin", return_value=True):
+            r = self.client.get(reverse("gemstone_activity"))
+        self.assertEqual(r.json()["activity"][0]["names"], ["House"])
 
 
 class AutopilotTests(Fresh, TestCase):
