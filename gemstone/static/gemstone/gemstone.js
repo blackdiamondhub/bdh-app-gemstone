@@ -366,6 +366,7 @@
 
   // ------------------------------------------------------------ data
   let OURS = null, LIB = null, oursP = null;
+  const gone = new Set(); // designs deleted on this screen whose delete is still going out
   let ORDER_PLAYS = null;
   const myPlays = {}; // plays from this screen since the last load: Recently played updates straight away
   const playsNow = () => Object.assign({}, (OURS && OURS.plays) || {}, myPlays);
@@ -374,6 +375,8 @@
     // Tonight asks from several places at once: share one request.
     if (!oursP || force) { const p = api(url('ours')).finally(() => { if (oursP === p) oursP = null; }); oursP = p; }
     OURS = await oursP;
+    // A delete still on its way to the cloud mustn't bring the card back.
+    if (gone.size) OURS = Object.assign({}, OURS, { patterns: OURS.patterns.filter((q) => !gone.has(q.id)) });
     // Groups keep the order they had when the page opened, so a card never jumps under a finger.
     if (!ORDER_PLAYS) ORDER_PLAYS = OURS.plays || {};
     return OURS;
@@ -570,32 +573,58 @@
       }
     }, 'g-cmenu');
   }
-  // Deletes straight away; the toast's Undo puts it back. The lights are left alone.
+  // The card goes (and the Undo toast shows) straight away; the cloud delete,
+  // which takes a few seconds, goes out behind it. The lights are left alone.
   async function deleteDesign(p, then) {
     closePop();
+    const back = dropOurs(p.id);
+    let undone = false;
+    const req = api(url('designDelete'), { id: p.id });
+    if (then) then();
+    renderView();
+    toast(['Deleted “', { b: p.name || 'Untitled' }, '”'], false, { label: 'Undo', onTap: () => { undone = true; restoreDesign(req, back); } });
     pending++;
     try {
-      const r = await api(url('designDelete'), { id: p.id });
-      try { await loadOurs(true); } catch (e) { /* shown on the next refresh */ }
-      if (then) then();
-      toast(['Deleted “', { b: r.name || p.name }, '”'], false, { label: 'Undo', onTap: () => restoreDesign(r.token) });
+      await req;
     } catch (e) {
-      if (e.status === 404) {
-        try { await loadOurs(true); } catch (e2) { /* shown on the next refresh */ }
-        if (then) then();
-        toast('Already deleted');
-      } else fail(e);
-    } finally { pending--; renderView(); if (!pending) refreshSoon(2000); }
+      if (e.status !== 404 && !undone) { back(); fail(e); }
+    } finally { gone.delete(p.id); pending--; reloadOursSoon(); }
   }
-  async function restoreDesign(token) {
+  // Undo shows the card again at once and restores it once the delete has gone through.
+  async function restoreDesign(req, back) {
+    back();
+    renderView();
     pending++;
     try {
-      const r = await api(url('designRestore'), { token });
+      let r;
+      try { r = await req; } catch (e) { return; } // the delete never happened
+      try {
+        await api(url('designRestore'), { token: r.token });
+        toast(['Restored ', { b: r.name || 'the design' }]);
+      } catch (e) { fail(e.status === 404 ? new Error('Too late to undo') : e); }
+    } finally { pending--; reloadOursSoon(); }
+  }
+  // Takes a design off the screen until the next load; the returned function puts it back.
+  function dropOurs(id) {
+    gone.add(id);
+    const list = (OURS && OURS.patterns) || [];
+    const i = list.findIndex((q) => q.id === id);
+    const item = i >= 0 ? list.splice(i, 1)[0] : null;
+    return () => {
+      gone.delete(id);
+      const now = (OURS && OURS.patterns) || [];
+      if (item && !now.some((q) => q.id === id)) now.splice(Math.min(i, now.length), 0, item);
+    };
+  }
+  // Reload once every write is done, so a half-finished delete or restore isn't shown.
+  let oursT = null;
+  function reloadOursSoon() {
+    clearTimeout(oursT);
+    oursT = setTimeout(async () => {
+      if (pending) return;
       try { await loadOurs(true); } catch (e) { /* shown on the next refresh */ }
-      toast(['Restored ', { b: r.name || 'the design' }]);
-    } catch (e) {
-      fail(e.status === 404 ? new Error('Too late to undo') : e);
-    } finally { pending--; renderView(); if (!pending) refreshSoon(2000); }
+      if (!pending) { renderView(); refreshSoon(2000); }
+    }, 300);
   }
   function solidTile(name, hex) {
     const b = h('button', 'solid');
