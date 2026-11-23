@@ -77,10 +77,27 @@ test('card menu: stock designs get no Delete, only deletable ones do', () => {
   assert.ok(!/disabled|'dis'/.test(menu), 'unavailable items are hidden, not disabled');
 });
 
-test('ownership tag is hidden inside folder groups', () => {
-  assert.match(body('card'), /if \(!info\.stock && !opts\.folder\)/);
-  assert.match(body('fillGroups'), /fillCards\([^;]*\{ folder: true \}\)/);
-  assert.ok(!/folder: true/.test(body('renderRecent') + body('renderFavs')), 'Recent/Favourites show the tag');
+// The Custom tag and the heart must read the same wherever a card shows (a design was "Custom"
+// in Favourites but not in its own folder, and favourites had no heart).
+test('ownership tag and heart show on every card, whatever row it is in', () => {
+  const c = body('card');
+  assert.match(c, /if \(!info\.stock\) \{/);
+  assert.match(c, /if \(isFav\(p\)\) \{/);
+  assert.ok(!/opts\.(folder|favRow)/.test(c), 'card() hides the tag or heart in some rows');
+  assert.ok(!/folder: true|favRow/.test(js), 'a caller still asks card() to hide them');
+});
+
+// Auto-save writes every edit, so Create must offer a way back to the design it opened with.
+test('Discard changes cancels the pending save and saves the original back', () => {
+  assert.match(html, /<button[^>]*id="c-discard"[^>]*hidden/);
+  const d = body('discardEdits');
+  assert.match(d, /if \(!revertable\(\)\) return/);
+  assert.match(d, /clearTimeout\(C\.saveT\); C\.again = false/, 'a pending auto-save would re-apply the edits');
+  assert.match(d, /o\.spec/);
+  assert.match(d, /saveDesign\(\)/);
+  assert.match(d, /if \(T\)[^\n]*pushLive\(\)/, 'a running try must show the original again');
+  assert.match(body('renderCreateHeader'), /dc\.hidden = !revertable\(\)/);
+  assert.match(body('openCreate'), /snapshot\(\);\s*location\.hash = '#create'/, 'snapshot after the copy name is set');
 });
 
 test('no Admin/guest label in the rail', () => {

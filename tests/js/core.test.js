@@ -153,14 +153,29 @@ test('nextUntitled: Untitled, then the first free (n), ignoring case and spaces'
   assert.equal(core.nextUntitled(['Untitled', 'Untitled (1)', 'Untitled (3)']), 'Untitled (2)');
 });
 
-test('nextCopyName: Name 2, then the first free number, from the base name', () => {
-  assert.equal(core.nextCopyName('Sunset', ['Sunset']), 'Sunset 2');
-  assert.equal(core.nextCopyName('Sunset', ['Sunset', 'sunset 2']), 'Sunset 3');
-  assert.equal(core.nextCopyName('Sunset 2', ['Sunset', 'Sunset 2']), 'Sunset 3');
-  assert.equal(core.nextCopyName('Sunset 3', ['Sunset 3']), 'Sunset 2');
-  assert.equal(core.nextCopyName('Sunset (copy)', ['Sunset', 'Sunset (copy)']), 'Sunset 2');
-  assert.equal(core.nextCopyName('Wave (4)', []), 'Wave 2');
-  assert.equal(core.nextCopyName('', []), 'Untitled 2');
+test('nextCopyName: "Name (copy)", then "(copy 2)"..., from the base name', () => {
+  assert.equal(core.nextCopyName('Sunset', ['Sunset']), 'Sunset (copy)');
+  assert.equal(core.nextCopyName('Sunset', ['Sunset', 'sunset (copy)']), 'Sunset (copy 2)');
+  assert.equal(core.nextCopyName('Sunset (copy)', ['Sunset', 'Sunset (copy)', 'Sunset (copy 2)']), 'Sunset (copy 3)');
+  assert.equal(core.nextCopyName('Sunset (copy 2)', ['Sunset (copy 2)']), 'Sunset (copy)');
+  assert.equal(core.nextCopyName('Wave (4)', []), 'Wave (copy)');
+  assert.equal(core.nextCopyName('Route 66', ['Route 66']), 'Route 66 (copy)', 'a trailing number is part of the name');
+  assert.equal(core.nextCopyName('', []), 'Untitled (copy)');
+});
+
+test('titleTidy: my designs keep "(copy)" so a copy is told apart from its original', () => {
+  assert.equal(core.titleTidy('Megan (copy)', 'wave', true), 'Megan (copy)');
+  assert.equal(core.titleTidy('Hungary - Motionless (copy 2)', 'motionless', true), 'Hungary (copy 2)');
+  assert.equal(core.titleTidy('Sunset (copy)', 'wave'), 'Sunset', 'stock: old copy suffix still dropped');
+  assert.equal(core.titleTidy('Wave (2)', 'wave', true), 'Wave (2)');
+});
+
+test('canRevert: only an edited saved design, never a copy/new one or an unchanged one', () => {
+  assert.equal(core.canRevert({ key: 'a', id: 'x' }, { key: 'b', id: 'x' }), true);
+  assert.equal(core.canRevert({ key: 'a', id: 'x' }, { key: 'a', id: 'x' }), false, 'nothing changed');
+  assert.equal(core.canRevert({ key: 'a', id: '' }, { key: 'b', id: 'y' }), false, 'copy/new made this visit: Delete covers it');
+  assert.equal(core.canRevert({ key: 'a', id: 'x' }, { key: 'b', id: 'z' }), false, 'a different design');
+  assert.equal(core.canRevert(null, { key: 'b', id: 'x' }), false);
 });
 
 test('sameDesign: matches on animation and colours only', () => {

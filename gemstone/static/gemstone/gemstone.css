@@ -192,7 +192,7 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .hero.c-try [data-chips]{top:120px}
 .gs .g-tact{font-weight:700;color:#0a7a35;background:transparent;border:0;font-size:inherit;margin-left:22px;cursor:pointer;white-space:nowrap}
 .gs .g-tact[hidden]{display:none}
-.gs .c-new,.gs .c-back{height:60px;padding:0 22px;font-size:20px}
+.gs .c-new,.gs .c-back,.gs .c-disc{height:60px;padding:0 22px;font-size:20px}
 .gs .c-back{flex:none}
 .gs .fold{height:60px;padding:0 22px;border-radius:18px;background:var(--s2);display:flex;align-items:center;gap:12px;font-size:20px;font-weight:600;white-space:nowrap;max-width:420px;overflow:hidden}
 .gs .fold small{color:var(--t3);font-weight:400}

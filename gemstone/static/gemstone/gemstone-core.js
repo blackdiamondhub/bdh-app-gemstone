@@ -103,13 +103,14 @@
   // A card title without the animation it already shows as a label or an old copy suffix:
   // "Hungary - Motionless (copy)" -> "Hungary", "Motionless - Canucks" -> "Canucks".
   // "Untitled (n)" keeps its number: it's the only thing telling those designs apart.
+  // ``mine`` (saved here, not stock) keeps "(copy)" / "(copy n)": it tells a copy from its original.
   const ALIASES = { motionless: ['motionless', 'solid', 'static', 'still'] };
-  function titleTidy(name, animation) {
+  function titleTidy(name, animation, mine) {
     const full = String(name || '').trim();
     if (!full) return 'Untitled';
     const anim = String(animation || 'motionless').toLowerCase();
     const words = new Set([anim, anim.replace(/_/g, ' '), anim.replace(/_/g, '-')].concat(ALIASES[anim] || []));
-    const copy = / \((copy|\d+)\)$/i.exec(full);
+    const copy = (mine ? / \((copy(?: \d+)?)\)$/i : / \((copy|\d+)\)$/i).exec(full);
     let core = copy ? full.slice(0, copy.index).trim() : full;
     for (const w of words) {
       const esc = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -118,7 +119,7 @@
       const next = core.replace(suffix, '').replace(prefix, '').trim();
       if (next) core = next;
     }
-    return core + (copy && /^untitled$/i.test(core) ? copy[0] : '');
+    return core + (copy && (mine || /^untitled$/i.test(core)) ? copy[0] : '');
   }
 
   // Patterns in the order a group shows them: most played here (then most
@@ -141,15 +142,22 @@
     for (let i = 1; ; i++) if (!taken.has('untitled (' + i + ')')) return 'Untitled (' + i + ')';
   }
 
-  // The name for a copy of ``name``: "Sunset" -> "Sunset 2", then "Sunset 3"... (first free,
-  // ignoring case). A copy of "Sunset 2" or the old "Sunset (copy)" / "Sunset (1)" counts from "Sunset".
+  // The name for a copy of ``name``: "Sunset" -> "Sunset (copy)", then "Sunset (copy 2)"... (first
+  // free, ignoring case). A copy of a copy, or an old "Sunset (1)", counts from "Sunset".
   function nextCopyName(name, names) {
-    let base = String(name || '').trim().replace(/\s*\((copy|\d+)\)$/i, '').trim();
-    const num = /^(.*\S)\s+\d+$/.exec(base);
-    if (num) base = num[1];
+    let base = String(name || '').trim().replace(/\s*\((copy(?: \d+)?|\d+)\)$/i, '').trim();
     if (!base) base = 'Untitled';
     const taken = new Set((names || []).map((n) => String(n || '').trim().toLowerCase()));
-    for (let i = 2; ; i++) if (!taken.has((base + ' ' + i).toLowerCase())) return base + ' ' + i;
+    if (!taken.has((base + ' (copy)').toLowerCase())) return base + ' (copy)';
+    for (let i = 2; ; i++) if (!taken.has((base + ' (copy ' + i + ')').toLowerCase())) return base + ' (copy ' + i + ')';
+  }
+
+  // Whether Create's "Discard changes" can put back the saved design it opened. ``orig`` is the
+  // snapshot taken when Create opened ({key, id}), ``now`` the current {key, id}; ``key`` is the
+  // design + folder as a string. A copy or new design made this visit has no saved original
+  // (orig.id is ''), so Delete covers it instead.
+  function canRevert(orig, now) {
+    return !!(orig && now && orig.id && now.id === orig.id && now.key !== orig.key);
   }
 
   // Whether the lights' pattern is still the design pushed from Create, or someone changed it.
@@ -169,7 +177,7 @@
   }
 
   const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, heroHidden, GUEST_LAST, NIGHT_ENDS,
-    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, sameDesign,
+    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, canRevert, sameDesign,
     dimOf };
   root.GemstoneCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
