@@ -321,7 +321,8 @@ def library() -> list[dict]:
                 p = d.pattern
                 if d.pattern_name and not p.name:
                     p.name = d.pattern_name
-                out.append(pattern_json(p, category=(d.category or "More").strip().title()))
+                out.append(pattern_json(p, category=(d.category or "More").strip().title(),
+                                        downloads=int(getattr(d, "downloads", 0) or 0)))
             if not fresh:
                 break
         return out
@@ -378,7 +379,32 @@ def play(ids, ref) -> dict:
     snapshot = _snapshot(ids)
     _play(ids, pattern)
     _end_dark()
+    record_play(getattr(pattern, "id", None))
     return {"undo": _keep_undo(snapshot), "name": pattern.name, "on": names(ids)}
+
+
+PLAYS_KEEP = 500
+_plays_lock = threading.Lock()
+
+
+def record_play(pattern_id, now=None) -> None:
+    """Count a play of ``pattern_id`` on this hub (drives "Recently played" and group order)."""
+    if not pattern_id:
+        return
+    now = now or dt.datetime.now(dt.timezone.utc)
+    with _plays_lock:
+        store = app_state(APP)
+        plays = dict(store.get("plays") or {})
+        prev = plays.get(str(pattern_id)) or {}
+        plays[str(pattern_id)] = {"n": int(prev.get("n", 0)) + 1, "at": now.isoformat()}
+        if len(plays) > PLAYS_KEEP:
+            keep = sorted(plays.items(), key=lambda kv: kv[1].get("at", ""), reverse=True)[:PLAYS_KEEP]
+            plays = dict(keep)
+        store.set("plays", plays)
+
+
+def plays() -> dict:
+    return dict(app_state(APP).get("plays") or {})
 
 
 def undo(token: str) -> dict:
