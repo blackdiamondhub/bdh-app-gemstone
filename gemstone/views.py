@@ -122,6 +122,7 @@ def library(request):
 @_guarded
 def ours(request):
     data = service.ours()
+    data = dict(data, plays=service.plays())
     if not is_admin(request):
         # Guests see the house's folders, but only save into their own.
         data = dict(data, folders=[dict(f, locked=not f["guest"]) for f in data["folders"]])

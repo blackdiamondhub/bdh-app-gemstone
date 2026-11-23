@@ -154,33 +154,7 @@
   const photoUrl = (c) => url('photo', c.id) + '?v=' + ((c.layout && c.layout.v) || 0);
   const aspectOf = (lay) => (lay && lay.photo && lay.aspect > 0 ? lay.aspect : 2);
 
-  function rnd(i) { const x = Math.sin(i * 12.9898) * 43758.5453; return x - Math.floor(x); }
-  const MODES = {
-    motionless: 'solid', starry: 'twinkle', glitter: 'twinkle', flicker: 'twinkle', glitch: 'twinkle',
-    chase: 'chase', marquee: 'chase', pacman: 'chase', ghost: 'chase', pyramid_chase: 'chase',
-    wave: 'wave', gradient_wave: 'wave', sway: 'wave', pulse: 'pulse', multipulse: 'pulse', tremor: 'pulse',
-    fade: 'fade', isofade: 'fade', smooth: 'fade', fireworks: 'fireworks',
-  };
-  const STILL = new Set(['motionless', 'starry', 'fade', 'pulse', 'flicker', 'glitter']);
-  // Colour and brightness (0..1) of LED ``i`` for pattern ``p`` at time ``t`` seconds.
-  function colAt(i, p, t) {
-    const cs = p.colors && p.colors.length ? p.colors : ['#fff1e0'];
-    const n = cs.length;
-    const T = t * (0.25 + 1.5 * ((p.speed == null ? 128 : p.speed) / 255)) * (p.direction === 1 ? -1 : 1);
-    switch (MODES[p.animation] || 'flow') {
-      case 'solid': return [cs[i % n], 1];
-      case 'twinkle': return [cs[i % n], rnd(i * 7 + Math.floor(Math.abs(T) * 3)) > 0.72 ? 1 : 0.22];
-      case 'chase': { const s = Math.floor(T * 6); return [cs[mod(Math.floor((i - s) / 4), n)], mod(i - s, 8) < 5 ? 1 : 0.06]; }
-      case 'wave': return [cs[mod(Math.floor((i / 9 - T * 2) / Math.PI), n)], 0.2 + 0.8 * (Math.sin(i / 9 - T * 2) + 1) / 2];
-      case 'pulse': return [cs[Math.floor(i / 12) % n], 0.25 + 0.75 * (Math.sin(Math.abs(T) * 2.5 + i / 40) + 1) / 2];
-      case 'fade': return [cs[mod(Math.floor(i / 50) + Math.floor(Math.abs(T) / 1.5), n)], 0.55 + 0.45 * Math.abs(Math.sin(Math.abs(T) * 2.1))];
-      case 'fireworks': {
-        const b = Math.floor(i / 40), ph = mod(Math.abs(T) * 0.8 + rnd(b) * 3, 3), d = Math.abs((i % 40) - 20);
-        return [cs[b % n], ph < 1 && d < ph * 20 ? 1 - ph * 0.7 : 0.05];
-      }
-      default: return [cs[mod(Math.floor((i - T * 8) / 20), n)], 1];
-    }
-  }
+  const { rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE } = window.GemstoneCore;
   function rgba(hex, a) {
     const v = parseInt(String(hex).slice(1), 16) || 0;
     return 'rgba(' + (v >> 16 & 255) + ',' + (v >> 8 & 255) + ',' + (v & 255) + ',' + a.toFixed(3) + ')';
@@ -203,31 +177,53 @@
       this.blur.hidden = true;
       el.prepend(this.blur, this.bg, this.pic, this.fx);
       this.key = '';
+      this.want = '';
+      this.loading = '';
       this.size = '';
+      this.runs = [];
+      this.aspect = 2;
+      this.photo = false;
     }
     set(ctrl, runs) {
       const lay = (ctrl && ctrl.layout) || { photo: false, runs: [] };
-      this.ctrl = ctrl;
-      this.photo = !!(ctrl && lay.photo);
-      this.aspect = aspectOf(lay);
-      this.runs = runs || lay.runs || [];
       const key = ctrl ? ctrl.id + '|' + (lay.photo ? lay.v : 'drawing') : 'none';
-      if (key !== this.key) {
-        this.key = key;
-        this.pic.textContent = '';
-        if (ctrl && lay.photo) {
-          const img = h('img');
-          img.src = photoUrl(ctrl);
-          img.alt = '';
-          img.style.cssText = 'width:100%;height:100%;display:block';
+      const commit = () => {
+        this.ctrl = ctrl;
+        this.photo = !!(ctrl && lay.photo);
+        this.aspect = aspectOf(lay);
+        this.runs = runs || lay.runs || [];
+        this.size = '';
+      };
+      this.want = key;
+      if (key === this.key) { this.loading = ''; commit(); return; }
+      if (ctrl && lay.photo) {
+        // Swap picture, aspect and lights together only once the new photo is
+        // decoded, so it never shows stretched into the old one's shape.
+        if (this.loading === key) return;
+        this.loading = key;
+        const img = h('img');
+        img.src = photoUrl(ctrl);
+        img.alt = '';
+        img.style.cssText = 'width:100%;height:100%;display:block';
+        const swap = () => {
+          if (this.want !== key) return;
+          this.loading = '';
+          this.key = key;
+          this.pic.textContent = '';
           this.pic.appendChild(img);
           this.blur.style.backgroundImage = 'url("' + photoUrl(ctrl) + '")';
-        } else {
-          this.blur.style.backgroundImage = '';
-          this.pic.innerHTML = '<svg viewBox="0 0 1000 500" preserveAspectRatio="none" style="width:100%;height:100%;display:block">' + HOUSE + '</svg>';
-        }
+          commit();
+          this.fit();
+          this.drawn = '';
+        };
+        (img.decode ? img.decode() : Promise.resolve()).then(swap, swap);
+        return;
       }
-      this.size = '';
+      this.key = key;
+      this.loading = '';
+      this.blur.style.backgroundImage = '';
+      this.pic.innerHTML = '<svg viewBox="0 0 1000 500" preserveAspectRatio="none" style="width:100%;height:100%;display:block">' + HOUSE + '</svg>';
+      commit();
     }
     fit() {
       const w = this.el.clientWidth, hh = this.el.clientHeight, A = this.aspect;
@@ -268,6 +264,8 @@
       Object.assign(this.pic.style, { left: this.ox + 'px', top: this.oy + 'px', width: this.pw + 'px', height: this.ph + 'px' });
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       [this.bg, this.fx].forEach((c) => { c.width = Math.max(1, Math.round(w * dpr)); c.height = Math.max(1, Math.round(hh * dpr)); });
+            // Resizing cleared the lights canvas, so a still scene must repaint.
+            this.drawn = '';
       this.dpr = dpr;
       const g = this.bg.getContext('2d');
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -343,7 +341,7 @@
     const n = 13, y = hh * 0.5;
     for (let j = 0; j < n; j++) {
       const x = w * (0.06 + 0.88 * (j + 0.5) / n);
-      const [c, a] = colAt(j * 3, p, t);
+      const [c, a] = colAt(stripIndex(j, p, n), p, t);
       g.fillStyle = rgba(c, 0.3 * a);
       g.beginPath(); g.arc(x, y, hh * 0.11, 0, 7); g.fill();
       g.fillStyle = rgba(c, Math.min(1, 0.25 + a));
@@ -353,11 +351,16 @@
 
   // ------------------------------------------------------------ data
   let OURS = null, LIB = null, oursP = null;
+  let ORDER_PLAYS = null;
+  const myPlays = {}; // plays from this screen since the last load: Recently played updates straight away
+  const playsNow = () => Object.assign({}, (OURS && OURS.plays) || {}, myPlays);
   async function loadOurs(force) {
     if (OURS && !force) return OURS;
     // Tonight asks from several places at once: share one request.
     if (!oursP || force) { const p = api(url('ours')).finally(() => { if (oursP === p) oursP = null; }); oursP = p; }
     OURS = await oursP;
+    // Groups keep the order they had when the page opened, so a card never jumps under a finger.
+    if (!ORDER_PLAYS) ORDER_PLAYS = OURS.plays || {};
     return OURS;
   }
   async function loadLib() {
@@ -401,6 +404,10 @@
     const ids = sel.slice(), list = selCtrls();
     const name = (preview && preview.name) || ref.name || 'pattern';
     toast(['Playing ', { b: name }, ' on ' + namesOf(list)]);
+    if (ref && ref.id) {
+      const was = playsNow()[ref.id] || {};
+      myPlays[ref.id] = { n: (was.n || 0) + 1, at: new Date().toISOString() };
+    }
     await optimistic(list,
       () => list.forEach((c) => { c.state = { on: true, pattern: preview || (c.state && c.state.pattern) }; }),
       () => api(url('play'), { ids, pattern: ref }));
@@ -485,7 +492,8 @@
     ht.setAttribute('aria-label', fav ? 'Remove from favourites' : 'Add to favourites');
     ht.setAttribute('aria-pressed', fav ? 'true' : 'false');
     ht.onclick = (e) => { e.stopPropagation(); ht.classList.add('g-pop'); setFav(p, !isFav(p)); };
-    const nm = h('div', 'nm', p.name);
+    const nm = h('div', 'nm', titleTidy(p.name, p.animation));
+    nm.title = p.name;
     nm.appendChild(h('span', 'an', pretty(p.animation || 'motionless')));
     tx.append(ht, nm);
     c.appendChild(tx);
@@ -624,6 +632,7 @@
     renderMiniDots();
     renderSched();
     renderEvent();
+    renderRecent();
     renderFavs();
     renderAll();
   }
@@ -798,6 +807,21 @@
     row.textContent = '';
     pats.forEach((p) => row.appendChild(card(p)));
   }
+  // Recently played strip: the last patterns played from any screen, newest first.
+  async function renderRecent() {
+    const wrap = $('t-recent-w'), row = $('t-recent');
+    if (!S.configured || !ctrls().length) { wrap.hidden = true; return; }
+    let o;
+    try { o = await loadOurs(); } catch (e) { wrap.hidden = true; return; }
+    if (view !== 'tonight') return;
+    const byId = new Map((LIB || []).concat(o.patterns).map((p) => [p.id, p]));
+    const plays = playsNow();
+    const pats = Object.keys(plays).filter((id) => byId.has(id))
+      .sort((a, b) => String(plays[b].at || '').localeCompare(String(plays[a].at || '')))
+      .slice(0, GROUP_PAGE).map((id) => byId.get(id));
+    wrap.hidden = !pats.length;
+    if (pats.length) fillCards(row, pats);
+  }
   // Favourites strip: hearted patterns only.
   async function renderFavs() {
     const row = $('t-favs');
@@ -811,7 +835,7 @@
       if (row._key !== 'empty') { row._key = 'empty'; row.textContent = ''; row.appendChild(h('div', 'empty', 'No favourites yet — tap ♡ on any pattern below.')); }
       return;
     }
-    fillCards(row, pats);
+    fillCards(row, orderGroup(pats, ORDER_PLAYS).slice(0, GROUP_PAGE));
   }
   // Only rebuild the cards when what they show has changed.
   function cardsKey(pats) {
@@ -850,12 +874,65 @@
   }
 
   // ------------------------------------------------------------ all patterns (chips + grid) and the library
+  // Collapsible groups of at most GROUP_PAGE cards, "Show more" for the rest.
+  // Open/closed is remembered per group; folders start open, library categories closed.
+  const GRP_KEY = 'gs-grp';
+  let grpOver = {};
+  try { grpOver = JSON.parse(localStorage.getItem(GRP_KEY) || '{}') || {}; } catch (e) { grpOver = {}; }
+  const grpMore = {}; // group key -> cards shown
+  const grpIsOpen = (g) => (g.key in grpOver ? !!grpOver[g.key] : g.open !== false);
+  function setGrpOpen(keys, open) {
+    keys.forEach((k) => { grpOver[k] = open; });
+    try { localStorage.setItem(GRP_KEY, JSON.stringify(grpOver)); } catch (e) { /* private mode */ }
+  }
+  // groups: [{ key, name, pats, open (default), head (false: no header) }], pats already ordered.
+  function fillGroups(box, groups, rerender, empty) {
+    if (!box._groups || box._key !== 'groups') { box._groups = new Map(); box._key = 'groups'; box._order = ''; box.replaceChildren(); }
+    const m = box._groups;
+    if (!groups.length) {
+      m.clear(); box._order = '';
+      if (empty) box.replaceChildren(h('div', 'empty', empty));
+      return;
+    }
+    groups.forEach((g) => {
+      let n = m.get(g.key);
+      if (!n) {
+        n = { wrap: h('div', 'g-fold'), head: h('button', 'g-fh'), body: h('div', 'g-grid'), more: h('button', 'g-more') };
+        n.head.onclick = () => { setGrpOpen([g.key], !n.wrap.classList.contains('closed') ? false : true); rerender(); };
+        n.more.onclick = () => { grpMore[g.key] = (grpMore[g.key] || GROUP_PAGE) + GROUP_PAGE; rerender(); };
+        n.wrap.append(n.head, n.body, n.more);
+        m.set(g.key, n);
+      }
+      const open = g.head === false || grpIsOpen(g);
+      n.head.hidden = g.head === false;
+      const hk = g.name + '|' + g.pats.length;
+      if (n.head._key !== hk) {
+        n.head._key = hk;
+        n.head.replaceChildren(h('span', 'chev', '▾'), document.createTextNode(g.name), h('em', '', String(g.pats.length)));
+      }
+      n.head.setAttribute('aria-expanded', open ? 'true' : 'false');
+      n.wrap.classList.toggle('closed', !open);
+      if (!open) return;
+      const lim = grpMore[g.key] || GROUP_PAGE;
+      fillCards(n.body, g.pats.slice(0, lim), g.empty);
+      const left = g.pats.length - lim;
+      n.more.hidden = left <= 0;
+      if (left > 0) n.more.textContent = 'Show ' + Math.min(GROUP_PAGE, left) + ' more · ' + left + ' left';
+    });
+    const order = groups.map((g) => g.key).join('\n');
+    if (box._order !== order) {
+      box._order = order;
+      const keep = new Set(groups.map((g) => g.key));
+      [...m.keys()].forEach((k) => { if (!keep.has(k)) m.delete(k); });
+      box.replaceChildren(...groups.map((g) => m.get(g.key).wrap));
+    }
+  }
   let cat = '';
   async function renderAll() {
-    const grid = $('t-grid'), chips = $('t-chips');
-    if (!S.configured || !ctrls().length) { grid.textContent = ''; chips.textContent = ''; $('t-count').textContent = ''; return; }
+    const grid = $('t-grid'), chips = $('t-chips'), cx = $('t-cx');
+    if (!S.configured || !ctrls().length) { grid.textContent = ''; grid._key = ''; chips.textContent = ''; $('t-count').textContent = ''; cx.hidden = true; return; }
     let o;
-    try { o = await loadOurs(); } catch (e) { grid.textContent = ''; grid.appendChild(h('div', 'empty', e.message)); return; }
+    try { o = await loadOurs(); } catch (e) { grid.textContent = ''; grid._key = ''; grid.appendChild(h('div', 'empty', e.message)); return; }
     if (view !== 'tonight') return;
     const folders = o.folders.filter((f) => f.count || f.guest);
     if (cat && cat !== 'solid' && !folders.some((f) => f.id === cat)) cat = '';
@@ -873,14 +950,33 @@
       });
     }
     $('t-count').textContent = o.patterns.length + (o.patterns.length === 1 ? ' pattern' : ' patterns');
+    const order = (pats) => orderGroup(pats, ORDER_PLAYS);
+    let groups = [];
     if (cat === 'solid') {
+      grid.classList.remove('g-grouped');
       if (grid._key !== 'solid') {
         grid._key = 'solid'; grid.textContent = '';
         SOLIDS.forEach(([n, c]) => grid.appendChild(solidTile(n, c)));
       }
+    } else if (cat) {
+      groups = [{ key: 'f:' + cat, name: '', head: false, pats: order(o.patterns.filter((p) => p.folder === cat)),
+        empty: 'Nothing here yet — make one in Create' }];
     } else {
-      fillCards(grid, o.patterns.filter((p) => !cat || p.folder === cat), 'Nothing here yet — make one in Create');
+      const known = new Set(folders.map((f) => f.id));
+      groups = folders.map((f) => ({ key: 'f:' + f.id, name: (f.guest ? '🔒 ' : '') + f.name,
+        pats: order(o.patterns.filter((p) => p.folder === f.id)) })).filter((g) => g.pats.length);
+      const loose = o.patterns.filter((p) => !p.folder || !known.has(p.folder));
+      if (loose.length) groups.push({ key: 'f:', name: 'Not in a folder', pats: order(loose) });
     }
+    if (cat !== 'solid') {
+      grid.classList.add('g-grouped');
+      fillGroups(grid, groups, renderAll, 'Nothing here yet — make one in Create');
+    }
+    const heads = cat ? [] : groups;
+    cx.hidden = heads.length < 2;
+    const anyOpen = heads.some(grpIsOpen);
+    cx.textContent = anyOpen ? 'Collapse all' : 'Expand all';
+    cx.onclick = () => { setGrpOpen(heads.map((g) => g.key), !anyOpen); renderAll(); };
     renderLib();
   }
   // Picking a chip keeps the header where it is when it's stuck, rather than jumping to the top.
@@ -909,7 +1005,15 @@
     }
     if (view !== 'tonight' || !libOpen) return;
     const mine = new Set(o.patterns.map((p) => p.id));
-    fillCards(box, lib.filter((p) => !mine.has(p.id)), "You've saved every library pattern");
+    const cats = new Map();
+    lib.filter((p) => !mine.has(p.id)).forEach((p) => {
+      const c = p.category || 'Other';
+      if (!cats.has(c)) cats.set(c, []);
+      cats.get(c).push(p);
+    });
+    const groups = [...cats.keys()].sort((a, b) => (a === 'Other') - (b === 'Other') || a.localeCompare(b))
+      .map((c) => ({ key: 'l:' + c, name: c, open: false, pats: orderGroup(cats.get(c), ORDER_PLAYS) }));
+    fillGroups(box, groups, renderLib, "You've saved every library pattern");
   }
   if (!SETUP) {
     $('t-libh').onclick = () => {

@@ -56,7 +56,85 @@
     return hero.bottom <= rootRect.top + top || hero.top >= rootRect.bottom;
   }
 
-  const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, heroHidden, GUEST_LAST, NIGHT_ENDS };
+  // ---------------------------------------------------------- pattern drawing
+  const mod = (a, n) => ((a % n) + n) % n;
+  function rnd(i) { const x = Math.sin(i * 12.9898) * 43758.5453; return x - Math.floor(x); }
+  const MODES = {
+    motionless: 'solid', starry: 'twinkle', glitter: 'twinkle', flicker: 'twinkle', glitch: 'twinkle',
+    chase: 'chase', marquee: 'chase', pacman: 'chase', ghost: 'chase', pyramid_chase: 'chase',
+    wave: 'wave', gradient_wave: 'wave', sway: 'wave', pulse: 'pulse', multipulse: 'pulse', tremor: 'pulse',
+    fade: 'fade', isofade: 'fade', smooth: 'fade', fireworks: 'fireworks',
+  };
+  const STILL = new Set(['motionless', 'starry', 'fade', 'pulse', 'flicker', 'glitter']);
+  // Colour and brightness (0..1) of LED ``i`` for pattern ``p`` at time ``t`` seconds.
+  function colAt(i, p, t) {
+    const cs = p.colors && p.colors.length ? p.colors : ['#fff1e0'];
+    const n = cs.length;
+    const T = t * (0.25 + 1.5 * ((p.speed == null ? 128 : p.speed) / 255)) * (p.direction === 1 ? -1 : 1);
+    switch (MODES[p.animation] || 'flow') {
+      case 'solid': return [cs[i % n], 1];
+      case 'twinkle': return [cs[i % n], rnd(i * 7 + Math.floor(Math.abs(T) * 3)) > 0.72 ? 1 : 0.22];
+      case 'chase': { const s = Math.floor(T * 6); return [cs[mod(Math.floor((i - s) / 4), n)], mod(i - s, 8) < 5 ? 1 : 0.06]; }
+      case 'wave': return [cs[mod(Math.floor((i / 9 - T * 2) / Math.PI), n)], 0.2 + 0.8 * (Math.sin(i / 9 - T * 2) + 1) / 2];
+      case 'pulse': return [cs[Math.floor(i / 12) % n], 0.25 + 0.75 * (Math.sin(Math.abs(T) * 2.5 + i / 40) + 1) / 2];
+      case 'fade': return [cs[mod(Math.floor(i / 50) + Math.floor(Math.abs(T) / 1.5), n)], 0.55 + 0.45 * Math.abs(Math.sin(Math.abs(T) * 2.1))];
+      case 'fireworks': {
+        const b = Math.floor(i / 40), ph = mod(Math.abs(T) * 0.8 + rnd(b) * 3, 3), d = Math.abs((i % 40) - 20);
+        return [cs[b % n], ph < 1 && d < ph * 20 ? 1 - ph * 0.7 : 0.05];
+      }
+      default: return [cs[mod(Math.floor((i - T * 8) / 20), n)], 1];
+    }
+  }
+  // LEDs per colour band in colAt, by mode.
+  const BAND = { chase: 4, wave: 9 * Math.PI, pulse: 12, fade: 50, fireworks: 40, flow: 20 };
+  // The LED index that dot ``j`` of an ``n``-dot strip preview samples. The dots
+  // span exactly one cycle of the pattern's colours, closer together than a band,
+  // so every colour shows (a 3-colour motionless strip was all red at j*3 spacing).
+  function stripIndex(j, p, n) {
+    n = n || 13;
+    const mode = MODES[p.animation] || 'flow';
+    if (mode === 'solid' || mode === 'twinkle') return j;
+    const k = Math.max(1, (p.colors && p.colors.length) || 1);
+    const band = BAND[mode];
+    if (mode === 'fireworks') return Math.floor((j + 0.5) * k / n) * band + band / 2;
+    return Math.floor((j + 0.5) * band * k / n);
+  }
+
+  // A card title without the animation it already shows as a label:
+  // "Hungary - Motionless (copy)" -> "Hungary (copy)", "Motionless - Canucks" -> "Canucks".
+  const ALIASES = { motionless: ['motionless', 'solid', 'static', 'still'] };
+  function titleTidy(name, animation) {
+    const full = String(name || '').trim();
+    if (!full) return 'Untitled';
+    const anim = String(animation || 'motionless').toLowerCase();
+    const words = new Set([anim, anim.replace(/_/g, ' '), anim.replace(/_/g, '-')].concat(ALIASES[anim] || []));
+    const copy = / \((copy|\d+)\)$/i.exec(full);
+    let core = copy ? full.slice(0, copy.index).trim() : full;
+    for (const w of words) {
+      const esc = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const suffix = new RegExp('\\s*[-–—:|]\\s*' + esc + '$', 'i');
+      const prefix = new RegExp('^' + esc + '\\s*[-–—:|]\\s*', 'i');
+      const next = core.replace(suffix, '').replace(prefix, '').trim();
+      if (next) core = next;
+    }
+    return core + (copy ? copy[0] : '');
+  }
+
+  // Patterns in the order a group shows them: most played here (then most
+  // recently), then most downloaded, then the order they came in.
+  function orderGroup(pats, plays) {
+    plays = plays || {};
+    return (pats || []).map((p, i) => ({ p, i, pl: plays[p.id] || {} }))
+      .sort((a, b) => ((b.pl.n || 0) - (a.pl.n || 0))
+        || String(b.pl.at || '').localeCompare(String(a.pl.at || ''))
+        || ((b.p.downloads || 0) - (a.p.downloads || 0))
+        || (a.i - b.i))
+      .map((x) => x.p);
+  }
+  const GROUP_PAGE = 18;
+
+  const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, heroHidden, GUEST_LAST, NIGHT_ENDS,
+    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE };
   root.GemstoneCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -60,7 +60,7 @@ class FakeGemstone:
                          Folder.from_api({"folderId": "f-gem", "name": "Holidays", "gemstoneManaged": True})]
         self.fps = [self._fp("f-ours", pat("p-ours", "Sunset", (0xFF, 0xFF00)), NOW)]
         self.library = [DownloadablePattern.from_api({"id": "d1", "patternData": pat("p-lib", "Candy cane"),
-                                                      "category": "christmas"})]
+                                                      "category": "christmas", "downloads": 42})]
         self.events_raw = {"homegroupId": "hg-1", "categoryIds": ["usa", "nhl-van"], "deviceIds": ["house"],
                            "setupYet": True, "allowStaticPatterns": True, "allowAnimatedPatterns": True,
                            "brightness": 255, "futureField": {"keep": 1},
@@ -265,9 +265,31 @@ class ServiceTests(Fresh, TestCase):
     def test_library_and_ours(self):
         lib = service.library()
         self.assertEqual((lib[0]["name"], lib[0]["category"]), ("Candy cane", "Christmas"))
+        self.assertEqual(lib[0]["downloads"], 42)
         ours = service.ours()
         self.assertEqual(ours["patterns"][0]["colors"], ["#ff0000", "#00ff00"])
         self.assertEqual({f["id"]: f["managed"] for f in ours["folders"]}, {"f-ours": False, "f-gem": True})
+
+    def test_plays_are_counted_per_pattern(self):
+        """Groups sort by what this hub has played; "Recently played" lists the latest."""
+        self.assertEqual(service.plays(), {})
+        service.play(["tub"], {"id": "p-lib"})
+        service.play(["house"], {"id": "p-lib"})
+        service.play(["house"], {"id": "p-ours"})
+        got = service.plays()
+        self.assertEqual((got["p-lib"]["n"], got["p-ours"]["n"]), (2, 1))
+        self.assertGreaterEqual(got["p-ours"]["at"], got["p-lib"]["at"])
+        service.record_play(None)
+        self.assertEqual(set(service.plays()), {"p-lib", "p-ours"})
+
+    def test_play_history_keeps_only_the_most_recent(self):
+        base = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+        for i in range(service.PLAYS_KEEP + 5):
+            service.record_play(f"p{i}", now=base + dt.timedelta(minutes=i))
+        got = service.plays()
+        self.assertEqual(len(got), service.PLAYS_KEEP)
+        self.assertNotIn("p0", got)
+        self.assertIn(f"p{service.PLAYS_KEEP + 4}", got)
 
     def test_brightness_replays_current_pattern(self):
         out = service.brightness(["house", "tub"], 50)
@@ -680,6 +702,11 @@ class ViewTests(Fresh, TestCase):
         self.assertEqual(self.post("gemstone_play", {"ids": ["x"], "pattern": {}}).status_code, 400)
         self.assertEqual(self.client.get(reverse("gemstone_play")).status_code, 405)
 
+    def test_ours_includes_play_history(self):
+        self.post("gemstone_play", {"ids": ["house"], "pattern": {"id": "p-ours"}})
+        plays = self.client.get(reverse("gemstone_ours")).json()["plays"]
+        self.assertEqual(plays["p-ours"]["n"], 1)
+
     def test_every_write_sends_ids_the_cloud_accepts(self):
         """Editing a design failed on every change: live/solid pattern ids weren't UUIDs."""
         names = [a for _, a in service.ANIMATIONS] + list(service.MORE_ANIMATIONS)
@@ -1088,6 +1115,36 @@ class PreviewDrawingTests(SimpleTestCase):
         self.assertIn("this.blur.hidden = !this.photo || this.opts.contain || fill;", fit)
         css = (ROOT / "static/gemstone/gemstone.css").read_text(encoding="utf-8")
         self.assertRegex(css, r"\.scn\.blur\{[^}]*filter:blur\(")
+
+    def test_photo_swaps_only_once_decoded(self):
+        """Switching hot tub <-> house briefly showed the new photo stretched into the old shape."""
+        body = self.js[self.js.index("const swap = () => {"):self.js.index("    fit() {")]
+        self.assertIn("img.decode", body)
+        self.assertIn("if (this.want !== key) return;", body)
+        # picture, aspect and lights change in the same step
+        swap = body[:body.index("};")]
+        self.assertLess(swap.index("appendChild(img)"), swap.index("commit()"))
+        self.assertLess(swap.index("commit()"), swap.index("this.fit()"))
+
+    def test_resize_redraws_still_previews(self):
+        """A motionless preview went blank ~20 s in: fit() cleared the canvas but the
+        still-frame cache said it was already drawn."""
+        fit = self.js[self.js.index("    fit() {"):self.js.index("    toPx(p)")]
+        self.assertIn("this.drawn = '';", fit)
+
+    def test_every_group_is_capped(self):
+        """Grouped lists show at most GROUP_PAGE cards, with Show more for the rest."""
+        groups = self.js[self.js.index("function fillGroups("):self.js.index("let cat = ''")]
+        self.assertIn("g.pats.slice(0, lim)", groups)
+        self.assertIn("grpMore[g.key] || GROUP_PAGE", groups)
+        lib = self.js[self.js.index("async function renderLib()"):self.js.index("$('t-libh').onclick")]
+        self.assertIn("fillGroups(box,", lib)
+        for fn in ("async function renderRecent()", "async function renderFavs()"):
+            body = self.js[self.js.index(fn):self.js.index("\n  }\n", self.js.index(fn))]
+            self.assertIn("GROUP_PAGE", body, fn)
+        html = (ROOT / "templates/gemstone/index.html").read_text(encoding="utf-8")
+        self.assertIn('id="t-recent-w"', html)
+        self.assertIn('id="t-cx"', html)
 
 class OptimisticUiTests(SimpleTestCase):
     """Cloud writes are spaced ~2 s apart server-side; taps must update the screen first,

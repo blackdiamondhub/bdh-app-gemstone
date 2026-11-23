@@ -107,3 +107,39 @@ test('heroHidden matches the pinned bar observer', () => {
   assert.equal(core.heroHidden({ top: 0, bottom: 0, height: 0 }, root, 140), false);
   assert.equal(core.heroHidden(hero(-4000, 500), { top: 0, bottom: 0, height: 0 }, 140), false);
 });
+
+test('stripIndex: every colour of every pattern shows on a card strip', () => {
+  const anims = Object.keys(core.MODES).concat(['rainbow', 'unknown_future_anim']);
+  const pal = ['#100000', '#200000', '#300000', '#400000', '#500000', '#600000',
+    '#700000', '#800000', '#900000', '#a00000', '#b00000', '#c00000'];
+  for (const animation of anims) {
+    for (let k = 1; k <= pal.length; k++) {
+      for (const direction of [0, 1]) {
+        const p = { animation, colors: pal.slice(0, k), speed: 128, direction };
+        const seen = new Set();
+        for (let j = 0; j < 13; j++) seen.add(core.colAt(core.stripIndex(j, p, 13), p, 1.3)[0]);
+        if (k <= 13) assert.equal(seen.size, k, `${animation} with ${k} colours showed ${seen.size}`);
+      }
+    }
+  }
+});
+
+test('titleTidy: drops the animation the card already labels', () => {
+  assert.equal(core.titleTidy('Hungary - Motionless (copy)', 'motionless'), 'Hungary (copy)');
+  assert.equal(core.titleTidy('Slovenia - Wave', 'wave'), 'Slovenia');
+  assert.equal(core.titleTidy('Motionless - Canucks', 'motionless'), 'Canucks');
+  assert.equal(core.titleTidy('Candy Chase: chase', 'chase'), 'Candy Chase');
+  assert.equal(core.titleTidy('Australia - Flag', 'motionless'), 'Australia - Flag');
+  assert.equal(core.titleTidy('Motionless', 'motionless'), 'Motionless');
+  assert.equal(core.titleTidy('Wave (2)', 'wave'), 'Wave (2)');
+  assert.equal(core.titleTidy('', 'wave'), 'Untitled');
+  assert.equal(core.titleTidy(null), 'Untitled');
+});
+
+test('orderGroup: most played, then most recent, then downloads, then original order', () => {
+  const pats = ['a', 'b', 'c', 'd', 'e'].map((id, i) => ({ id, downloads: [5, 0, 9, 0, 0][i] }));
+  const plays = { b: { n: 3, at: '2026-01-01' }, d: { n: 3, at: '2026-02-01' }, e: { n: 1, at: '2026-03-01' } };
+  assert.deepEqual(core.orderGroup(pats, plays).map((p) => p.id), ['d', 'b', 'e', 'c', 'a']);
+  assert.deepEqual(core.orderGroup(pats).map((p) => p.id), ['c', 'a', 'b', 'd', 'e']);
+  assert.equal(core.GROUP_PAGE, 18);
+});

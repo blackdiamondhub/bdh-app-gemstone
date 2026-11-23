@@ -64,13 +64,17 @@
           <span class="grow"></span><span class="t-evx" id="t-ev-x">Show ▾</span></button>
         <div class="scroller cards" id="t-evrow" hidden></div>
       </div>
+      <div class="t-favs" id="t-recent-w" hidden>
+        <div class="sh"><h2>🕘 Recently played</h2><span class="g-shr">swipe →</span></div>
+        <div class="scroller cards g-drag" id="t-recent"></div>
+      </div>
       <div class="t-favs">
         <div class="sh"><h2 id="t-fav-h">♥ Favourites</h2><span class="g-shr">swipe → · tap ♥ to remove</span></div>
         <div class="scroller cards g-drag" id="t-favs"></div>
       </div>
       <div class="g-all" id="t-all">
         <div class="g-stk" id="t-stk">
-          <div class="sh"><h2>All patterns</h2><span class="g-shr" id="t-count"></span></div>
+          <div class="sh"><h2>All patterns</h2><span><span class="g-shr" id="t-count"></span><button class="g-cx" id="t-cx" hidden>Collapse all</button></span></div>
           <div class="g-chips g-drag" id="t-chips"></div>
         </div>
         <div class="g-grid" id="t-grid"></div>
