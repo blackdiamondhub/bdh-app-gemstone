@@ -27,6 +27,7 @@ def _error(msg, status=400):
 def _guarded(fn):
     """Turn the service's errors into JSON responses."""
     def wrapper(request, *args, **kwargs):
+        token = service.actor.set("admin" if is_admin(request) else "guest")
         try:
             return fn(request, *args, **kwargs)
         except cloud.NotConfigured:
@@ -38,6 +39,8 @@ def _guarded(fn):
         except cloud.CloudError as exc:
             log.warning("Gemstone cloud error: %s", exc)
             return _error("Gemstone didn't respond — try again in a moment", 502)
+        finally:
+            service.actor.reset(token)
     wrapper.__name__ = fn.__name__
     wrapper.__doc__ = fn.__doc__
     return wrapper
@@ -186,6 +189,14 @@ def autopilot_api(request):
     if request.method == "GET":
         return JsonResponse(service.autopilot())
     return JsonResponse({"settings": service.set_autopilot(_body(request), admin=True)})
+
+
+@require_GET
+@_guarded
+def activity(request):
+    """What was sent to the lights, newest first (admins only)."""
+    _admin_only(request)
+    return JsonResponse({"activity": service.activity()})
 
 
 @require_POST

@@ -41,3 +41,13 @@ limited.
 
 Writes to the Gemstone cloud are sent one at a time, about two seconds apart, because the cloud
 silently drops overlapping commands. Reads are cached briefly.
+
+The brightness slider only changes lights that are on; it never turns one on.
+
+Gemstone's Autopilot can skip its off time for a controller that was sent a command during the
+evening, so the app double-checks: 3 minutes after Autopilot's off time it turns off any
+Autopilot controller that is still on, once a night, unless "keep on until" is holding it on.
+
+Every command the app sends (play, live, power, brightness, autopilot changes and its own
+off-time enforcement) is kept in a log of the last 300, with who sent it (admin, guest or the
+app itself). Admins can read it at `api/activity/`.
