@@ -55,3 +55,53 @@ test('the swatch row leaves room for the 8px selected ring', () => {
   const pad = css.match(/\.gs \.c-sws\{[^}]*padding:([^;}]+)/)[1].trim().split(/\s+/).map((x) => parseInt(x, 10));
   assert.ok(pad.every((p) => p >= 8), 'c-sws padding ' + pad.join(' '));
 });
+
+// The body of ``function name(...) {...}`` in gemstone.js (naive brace match; fine for this file).
+function body(name) {
+  const i = js.search(new RegExp('function ' + name + '\\('));
+  assert.ok(i >= 0, 'no function ' + name);
+  let d = 0, j = js.indexOf('{', i);
+  for (let k = j; k < js.length; k++) {
+    if (js[k] === '{') d++;
+    else if (js[k] === '}' && --d === 0) return js.slice(j, k + 1);
+  }
+  return js.slice(j);
+}
+
+test('no Admin/guest label in the rail', () => {
+  assert.ok(!/gs-who/.test(js + html), 'gs-who is back');
+  assert.ok(!/\.who\b/.test(css), '.who rules are back');
+});
+
+test('lights badge says LIVE, not ON LIGHTS', () => {
+  assert.ok(!/on lights/i.test(js + html));
+  assert.ok(/'LIVE'/.test(js));
+});
+
+// Create must never touch the house except through an explicit "Show on house" try.
+test('Create has no lights switch; edits only go live during a try', () => {
+  const hero = html.match(/<div class="hero c-hero"[\s\S]*?<\/div>\s*<button class="c-show"/);
+  assert.ok(hero, 'c-hero / c-show markup moved');
+  assert.ok(!/data-lights|g-lights/.test(hero[0]), 'a lights switch is back in the Create hero');
+  const ch = body('changed');
+  assert.ok(/if \(T\)[^\n]*pushLive/.test(ch), 'changed() must push only while a try is running');
+  assert.ok(!/lightsOn\(\)/.test(ch), 'changed() must not go live just because the lights are on');
+  assert.ok(/if \(!T\) return/.test(body('pushLive')), 'pushLive must bail when the try has ended');
+});
+
+test('a try asks the server for an undo token and gives it back when it ends', () => {
+  assert.ok(/start: true/.test(body('startTry')));
+  const e = body('endTry');
+  assert.ok(/url\('undo'\)/.test(e) && /token: t\.undo/.test(e));
+  assert.ok(/url\('power'\)[^\n]*on: false/.test(e), 'nothing was on before: turn it back off');
+});
+
+test('leaving Create ends the try (puts the house back)', () => {
+  assert.ok(/if \(T && view === 'create' && v !== 'create'\) endTry\(true, true\)/.test(body('routeFromHash')));
+});
+
+// The slim strip and the big scene must dim the same way with brightness.
+test('both previews dim with brightness via dimOf', () => {
+  assert.ok(/dimOf\(p\)/.test(body('strip')), 'strip() ignores brightness');
+  assert.ok((js.match(/dimOf\(/g) || []).length >= 2, 'Scene ignores brightness');
+});

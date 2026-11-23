@@ -140,7 +140,7 @@ def pattern_from_spec(spec: dict, *, name: str = "", pattern_id: str = ""):
     brightness = round(_clamp(spec.get("brightness", 100), 1, 100, "brightness") * 255 / 100)
     return _pattern_cls()(
         id=pattern_id,
-        name=(name or str(spec.get("name") or "Untitled design"))[:60],
+        name=(name or str(spec.get("name") or "Untitled"))[:60],
         colors=[hex_to_int(c) for c in colors],
         animation=animation,
         brightness=brightness,
@@ -416,12 +416,21 @@ def undo(token: str) -> dict:
     return {"restored": [s["id"] for s in snapshot]}
 
 
-def live(ids, spec) -> dict:
-    """Push the design being edited straight to the lights."""
+def live(ids, spec, *, start: bool = False) -> dict:
+    """Push the design being edited straight to the lights.
+
+    ``start`` marks the first push of a "Show on house" try: what the lights
+    were doing is kept so "Back" (``undo``) can put it back, including off.
+    """
     ids = check_ids(ids)
-    _play(ids, pattern_from_spec(spec, pattern_id=str(uuid.uuid4())))
+    pattern = pattern_from_spec(spec, pattern_id=str(uuid.uuid4()))
+    snapshot = _snapshot(ids) if start else None
+    _play(ids, pattern)
     _end_dark()
-    return {"on": names(ids)}
+    out = {"on": names(ids)}
+    if snapshot is not None:
+        out["undo"] = _keep_undo(snapshot)
+    return out
 
 
 def power(ids, on: bool, *, admin: bool, now=None) -> dict:
@@ -1040,9 +1049,8 @@ def new_folder(name: str) -> dict:
     return {"id": _create_folder(name), "name": name}
 
 
-def guest_design_name(now=None) -> str:
-    now = _local_now(now)
-    return f"Guest design · {now:%Y-%m-%d %H:%M}"
+def _clean_name(name) -> str:
+    return " ".join(str(name or "").split())[:60]
 
 
 def _design(design_id) -> dict | None:
@@ -1058,8 +1066,8 @@ def save_design(spec, *, admin: bool, design_id: str = "", folder_id: str = "",
                 name: str = "", now=None) -> dict:
     """Save the design being edited; called on every change (auto-save).
 
-    Guests always save into "Guest designs" under a date-coded name and can
-    only update their own folder's designs. Admins pick the folder and name.
+    Guests always save into "Guest designs" and can only update their own
+    folder's designs. Admins also pick the folder. Everyone names their design.
     """
     design_id = str(design_id or "")
     if design_id and not _ID.match(design_id):
@@ -1070,7 +1078,7 @@ def save_design(spec, *, admin: bool, design_id: str = "", folder_id: str = "",
         folder_id = guest_id
         if existing and existing["folder"] != guest_id:
             existing, design_id = None, ""  # a guest can't edit the house's own designs
-        name = existing["name"] if existing else guest_design_name(now)
+        name = _clean_name(name) or (existing or {}).get("name") or "Untitled"
     else:
         folders = {f.folder_id: f for f in _folder_list()}
         if not folder_id:
@@ -1081,7 +1089,7 @@ def save_design(spec, *, admin: bool, design_id: str = "", folder_id: str = "",
         folder = folders.get(folder_id)
         if folder is None or folder.gemstone_managed:
             raise Invalid("pick one of your own folders")
-        name = " ".join(str(name or (existing or {}).get("name") or "Untitled design").split())[:60]
+        name = _clean_name(name) or (existing or {}).get("name") or "Untitled"
     if not existing:
         design_id = ""
     moved_from = existing["folder"] if existing and existing["folder"] != folder_id else None
