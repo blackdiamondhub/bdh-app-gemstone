@@ -976,15 +976,19 @@ class LightsSwitchTests(SimpleTestCase):
         self.html = (ROOT / "templates/gemstone/index.html").read_text(encoding="utf-8")
         self.js = (ROOT / "static/gemstone/gemstone.js").read_text(encoding="utf-8")
 
-    def test_every_preview_picture_has_the_switch(self):
-        for hero in ("t-hero", "c-hero"):
-            block = self.html.split(f'id="{hero}"', 1)[1].split("</div>", 1)[0]
-            self.assertIn("data-lights", block, hero)
+    def test_tonight_has_the_switch_create_tries_it_on(self):
+        # Tonight controls the house; Create only touches it through "Show on house" (a try).
+        block = self.html.split('id="t-hero"', 1)[1].split("</div>", 1)[0]
+        self.assertIn("data-lights", block)
+        create = self.html.split('id="c-hero"', 1)[1].split('class="c-show"', 1)[0]
+        self.assertNotIn("data-lights", create)
+        self.assertIn('id="c-show"', self.html)
 
-    def test_old_live_button_and_undo_are_gone(self):
+    def test_undo_only_comes_from_a_try(self):
         for gone in ("c-live", "gs-toast-undo"):
             self.assertNotIn(gone, self.html)
-        self.assertNotIn("url('undo')", self.js)
+        self.assertEqual(self.js.count("url('undo')"), 1)
+        self.assertIn("token: t.undo", self.js)
         self.assertIsNone(re.search(r"\bC\.live\b", self.js))
 
     def test_taps_go_through_the_switch(self):
