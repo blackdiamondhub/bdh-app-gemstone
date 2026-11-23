@@ -163,7 +163,7 @@
   const photoUrl = (c) => url('photo', c.id) + '?v=' + ((c.layout && c.layout.v) || 0);
   const aspectOf = (lay) => (lay && lay.photo && lay.aspect > 0 ? lay.aspect : 2);
 
-  const { rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, sameDesign, dimOf } = window.GemstoneCore;
+  const { rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, canRevert, sameDesign, dimOf } = window.GemstoneCore;
   function rgba(hex, a) {
     const v = parseInt(String(hex).slice(1), 16) || 0;
     return 'rgba(' + (v >> 16 & 255) + ',' + (v >> 8 & 255) + ',' + (v & 255) + ',' + a.toFixed(3) + ')';
@@ -509,17 +509,17 @@
     }
     const info = designInfo(p);
     const cb = h('div', 'g-cb');
-    const nm = h('div', 'g-cn', titleTidy(p.name, p.animation));
+    const nm = h('div', 'g-cn', titleTidy(p.name, p.animation, !info.stock));
     nm.title = p.name;
     const cm = h('div', 'g-cm'), cmt = h('div', 'g-cmt');
-    if (!info.stock && !opts.folder) {
+    if (!info.stock) {
       const own = h('span', 'g-own' + (info.guest ? ' guest' : ''), info.guest ? '👤' : '🏠');
       own.appendChild(h('span', 'g-ownl', info.guest ? ' Guest' : ' Custom'));
       cmt.append(own, document.createTextNode(' · '));
     }
     cmt.appendChild(document.createTextNode(pretty(p.animation || 'motionless')));
     cm.appendChild(cmt);
-    if (isFav(p) && !opts.favRow) {
+    if (isFav(p)) {
       const hp = h('span', 'g-hp', '♥');
       hp.setAttribute('aria-label', 'Favourite');
       cm.appendChild(hp);
@@ -923,7 +923,7 @@
       if (row._key !== 'empty') { row._key = 'empty'; row.textContent = ''; row.appendChild(h('div', 'empty', 'No favourites yet — tap ⋯ on any pattern below.')); }
       return;
     }
-    fillCards(row, orderGroup(pats, ORDER_PLAYS).slice(0, GROUP_PAGE), '', { favRow: true });
+    fillCards(row, orderGroup(pats, ORDER_PLAYS).slice(0, GROUP_PAGE), '');
   }
   // Only rebuild the cards when what they show has changed.
   function cardsKey(pats) {
@@ -1002,7 +1002,7 @@
       n.wrap.classList.toggle('closed', !open);
       if (!open) return;
       const lim = grpMore[g.key] || GROUP_PAGE;
-      fillCards(n.body, g.pats.slice(0, lim), g.empty, { folder: true });
+      fillCards(n.body, g.pats.slice(0, lim), g.empty);
       const left = g.pats.length - lim;
       n.more.hidden = left <= 0;
       if (left > 0) n.more.textContent = 'Show ' + Math.min(GROUP_PAGE, left) + ' more · ' + left + ' left';
@@ -1241,16 +1241,21 @@
   const QUICK = [['Red', '#e3262b'], ['Green', '#1fa64a'], ['Warm white', '#fdf4bc'], ['Gold', '#ffb800'], ['Blue', '#2f6bff'],
     ['Purple', '#8b3dff'], ['Orange', '#ff7a1a'], ['Pink', '#ff4fa3'], ['White', '#ffffff'], ['Teal', '#14b8a6']];
   const C = { design: null, id: '', folder: null, selIdx: 0, more: false, dirty: false,
-    saving: false, again: false, saveT: null, liveT: null };
+    saving: false, again: false, saveT: null, liveT: null, orig: null };
   const untitled = () => nextUntitled(OURS ? OURS.patterns.map((p) => p.name) : []);
   function newDesign() {
     C.design = { colors: ['#e3262b', '#1fa64a', '#fdf4bc', '#ffb800'], animation: 'starry', brightness: 100, speed: 128, direction: 0, name: untitled() };
     C.id = ''; C.folder = null; C.selIdx = 0; C.dirty = false;
+    snapshot();
     if (!SETUP) savedText('');
   }
-  newDesign();
   const spec = () => ({ colors: C.design.colors.slice(), animation: C.design.animation, brightness: C.design.brightness,
     speed: C.design.speed, direction: C.design.direction, name: C.design.name });
+  // The design + folder as a string, to tell whether anything changed since Create opened.
+  const editKey = () => JSON.stringify([spec(), C.folder ? C.folder.id : '']);
+  function snapshot() { C.orig = { key: editKey(), id: C.id, spec: spec(), folder: C.folder }; }
+  const revertable = () => canRevert(C.orig, { key: editKey(), id: C.id });
+  newDesign();
   const previewPattern = () => ({ colors: C.design.colors, animation: C.design.animation, speed: C.design.speed,
     direction: C.design.direction, brightness: Math.round(C.design.brightness * 255 / 100) });
 
@@ -1269,6 +1274,7 @@
     }
     C.more = !STILL.has(C.design.animation) && !S.animations.some((a) => a.name === C.design.animation);
     C.more = C.more || S.more_animations.includes(C.design.animation);
+    snapshot();
     location.hash = '#create';
     if (view === 'create') renderView();
   }
@@ -1421,6 +1427,8 @@
     const del = $('c-del');
     const mp = C.id && OURS && OURS.patterns.find((q) => q.id === C.id);
     if (del) del.hidden = !C.id || !!(mp && mp.stock);
+    const dc = $('c-discard');
+    if (dc) dc.hidden = !revertable();
   }
   function renderCreate() {
     const list = selCtrls();
@@ -1500,6 +1508,25 @@
     const p = (OURS && OURS.patterns.find((q) => q.id === C.id)) || { id: C.id, name: C.design.name };
     deleteDesign(p, () => { newDesign(); location.hash = '#tonight'; });
   };
+  // Put back the saved design Create opened with. Auto-save already wrote the edits, so this
+  // cancels any pending save and saves the original again (and re-shows it if trying it live).
+  function discardEdits() {
+    if (!revertable()) return;
+    clearTimeout(C.saveT); C.again = false;
+    const o = C.orig;
+    C.design = Object.assign({}, o.spec, { colors: o.spec.colors.slice() });
+    C.folder = o.folder; C.selIdx = 0;
+    const t = $('c-title');
+    t.textContent = C.design.name;  // before blur, so rename-on-blur sees no change
+    if (document.activeElement === t) t.blur();
+    C.dirty = true;
+    savedText('Saving\u2026', 'wait');
+    renderCreate();
+    saveDesign();
+    if (T) { clearTimeout(C.liveT); pushLive(); }
+    toast(['Changes to ', { b: C.design.name }, ' discarded']);
+  }
+  $('c-discard').onclick = discardEdits;
   $('c-back').onclick = () => { location.hash = '#tonight'; };
   const title = $('c-title');
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });

@@ -14,13 +14,15 @@ number of controllers.
   saved. Each card's ⋯ menu (or a long press) offers Edit / Edit a copy, add to or remove from
   favourites (a library pattern is saved into your folder as it does) and, for your own designs,
   Delete — it happens at once with an Undo toast for a few seconds; library and Gemstone-managed
-  patterns can't be deleted, and guests can only delete Guest designs. Outside folder groups,
-  cards tag 🏠 Custom and 👤 Guest designs. Copies are named "Sunset 2", "Sunset 3", ….
+  patterns can't be deleted, and guests can only delete Guest designs. Every card tags
+  🏠 Custom and 👤 Guest designs and shows ♥ on favourites. Copies are named "Sunset (copy)",
+  "Sunset (copy 2)", ….
   Tapping a card plays it without moving the page; once the big picture has scrolled
   away a slim now-playing bar with the same Lights switch and brightness stays at the top, its
   picture zoomed so every light is in view. `#patterns` links open Tonight at All patterns.
 - **Create** — pick colours, an animation, speed, brightness and direction. Designs save
-  automatically; "Live on lights" pushes the design to the real lights while you edit.
+  automatically; "↺ Discard changes" (shown once you edit a saved design) puts back the design
+  as it was when Create opened. "Show on house" tries the design on the real lights while you edit.
 - **Setup** (admins, hub Settings → Gemstone → Photos & light paths) — per controller, upload a
   photo of the house and draw the light runs on it. The preview spaces dots evenly along each run
   and patterns flow through the runs in the order they were drawn. Tap a point to delete it, or a
