@@ -86,6 +86,23 @@ test('ownership tag and heart show on every card, whatever row it is in', () => 
   assert.ok(!/opts\.(folder|favRow)/.test(c), 'card() hides the tag or heart in some rows');
   assert.ok(!/folder: true|favRow/.test(js), 'a caller still asks card() to hide them');
 });
+// Cloud writes take seconds. A tap on a card must change the screen first and write behind it
+// (delete waited for the cloud delete and a full reload before the card went).
+test('card actions update the screen before waiting on the cloud', () => {
+  for (const name of ['deleteDesign', 'restoreDesign', 'setFav']) {
+    const b = body(name);
+    const r = b.indexOf('renderView()'), a = b.indexOf('await ');
+    assert.ok(r >= 0 && r < a, name + ' awaits before it re-renders');
+  }
+  assert.ok(body('deleteDesign').indexOf('toast(') < body('deleteDesign').indexOf('await '), 'the Undo toast waits on the cloud');
+  assert.match(body('loadOurs'), /gone\.has/, 'a reload mid-delete would bring the card back');
+});
+// A bare 🏠 on phones didn't say what it meant; the word must show at every width.
+test('the Custom/Guest word is never hidden', () => {
+  for (const m of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    if (/\.g-ownl\b/.test(m[1])) assert.ok(!/display:\s*none|visibility:\s*hidden/.test(m[2]), m[1].trim() + ' hides it');
+  }
+});
 
 // Auto-save writes every edit, so Create must offer a way back to the design it opened with.
 test('Discard changes cancels the pending save and saves the original back', () => {
