@@ -54,9 +54,9 @@ function functions() {
   return out;
 }
 
-// Code that only runs on a later, separate user action: element handlers.
+// Code that only runs on a later, separate user action: element handlers and toast actions ({ onTap }).
 function withoutHandlers(body) {
-  const re = /\.on\w+\s*=|addEventListener\s*\(/g;
+  const re = /\.on\w+\s*=|\bon[A-Z]\w*\s*:|addEventListener\s*\(/g;
   let out = '', last = 0, m;
   while ((m = re.exec(body))) {
     if (m.index < last) continue;

@@ -133,8 +133,31 @@
   }
   const GROUP_PAGE = 18;
 
+  // A new design's name: "Untitled", or "Untitled (n)" with the first free n.
+  function nextUntitled(names) {
+    const taken = new Set((names || []).map((n) => String(n || '').trim().toLowerCase()));
+    if (!taken.has('untitled')) return 'Untitled';
+    for (let i = 1; ; i++) if (!taken.has('untitled (' + i + ')')) return 'Untitled (' + i + ')';
+  }
+
+  // Whether the lights' pattern is still the design pushed from Create, or someone changed it.
+  // Name and brightness are ignored: the cloud may rename it and brightness is a live slider.
+  function sameDesign(pattern, spec) {
+    if (!pattern || !spec) return false;
+    const cols = (a) => (a || []).map((c) => String(c).toLowerCase()).join();
+    return (pattern.animation || 'motionless') === (spec.animation || 'motionless')
+      && cols(pattern.colors) === cols(spec.colors);
+  }
+
+  // How a pattern's brightness dims a drawn light: [glow, core] alpha factors.
+  // Full brightness is [1, 1]; the core dims too so small previews show the change.
+  function dimOf(p) {
+    const b = Math.max(0, Math.min(1, ((p && p.brightness != null) ? p.brightness : 255) / 255));
+    return [0.35 + 0.65 * b, 0.3 + 0.7 * b];
+  }
+
   const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, heroHidden, GUEST_LAST, NIGHT_ENDS,
-    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE };
+    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, sameDesign, dimOf };
   root.GemstoneCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);

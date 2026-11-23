@@ -57,17 +57,21 @@
 
   // ------------------------------------------------------------ toast + popover
   let toastTimer = null;
-  function toast(parts, err) {
-    const t = $('gs-toast'), tx = $('gs-toast-text');
+  // ``action`` = { label, onTap } adds a button (e.g. "Show it again") and keeps the toast up longer.
+  function toast(parts, err, action) {
+    const t = $('gs-toast'), tx = $('gs-toast-text'), b = $('gs-toast-act');
     tx.textContent = '';
     (Array.isArray(parts) ? parts : [parts]).forEach((p) => {
       if (p && typeof p === 'object') tx.appendChild(h('b', '', p.b));
       else tx.appendChild(document.createTextNode(String(p)));
     });
     t.classList.toggle('err', !!err);
+    b.hidden = !action;
+    b.onclick = action ? () => { t.hidden = true; action.onTap(); } : null;
+    if (action) b.textContent = action.label;
     t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
+    toastTimer = setTimeout(() => { t.hidden = true; }, action ? 8000 : 4000);
   }
   const fail = (e) => toast(e.message || String(e), true);
 
@@ -154,7 +158,7 @@
   const photoUrl = (c) => url('photo', c.id) + '?v=' + ((c.layout && c.layout.v) || 0);
   const aspectOf = (lay) => (lay && lay.photo && lay.aspect > 0 ? lay.aspect : 2);
 
-  const { rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE } = window.GemstoneCore;
+  const { rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, sameDesign, dimOf } = window.GemstoneCore;
   function rgba(hex, a) {
     const v = parseInt(String(hex).slice(1), 16) || 0;
     return 'rgba(' + (v >> 16 & 255) + ',' + (v >> 8 & 255) + ',' + (v & 255) + ',' + a.toFixed(3) + ')';
@@ -276,6 +280,9 @@
         g.beginPath(); g.arc(rnd(i) * w, rnd(i + 99) * hh * 0.6, r, 0, 7); g.fill();
       }
       this.dots = this.layoutDots();
+      // Resizing blanked the lights. Called from outside draw() (a re-render),
+      // repaint now rather than on the next tick, or the lights blink off.
+      if (!this.drawing && this.last) this.draw(...this.last);
     }
     toPx(p) { return [this.ox + p[0] * this.pw, this.oy + p[1] * this.ph]; }
     toPic(x, y) { return [clamp((x - this.ox) / this.pw, 0, 1), clamp((y - this.oy) / this.ph, 0, 1)]; }
@@ -306,7 +313,9 @@
     }
     draw(pattern, on, t) {
       if (!this.el.offsetParent) return;
-      this.fit();
+      this.last = [pattern, on, t];
+      this.drawing = true;
+      try { this.fit(); } finally { this.drawing = false; }
       // Motionless or off scenes look the same every tick; don't repaint them.
       const still = !on || !pattern || (pattern.animation || 'motionless') === 'motionless';
       const sig = still ? this.size + '|' + (on ? JSON.stringify(pattern) : 'off') : '';
@@ -322,13 +331,13 @@
         this.dots.forEach(([x, y]) => { g.beginPath(); g.arc(x, y, r * 0.8, 0, 7); g.fill(); });
         return;
       }
-      const bs = 0.35 + 0.65 * clamp((pattern.brightness == null ? 255 : pattern.brightness) / 255, 0, 1);
+      const [bs, bc] = dimOf(pattern);
       this.dots.forEach(([x, y, i]) => {
         const [c, a] = colAt(i, pattern, t);
         const al = a * bs;
         g.fillStyle = rgba(c, 0.28 * al);
         g.beginPath(); g.arc(x, y, gr, 0, 7); g.fill();
-        g.fillStyle = rgba(c, Math.min(1, 0.25 + al));
+        g.fillStyle = rgba(c, Math.min(1, 0.25 + al) * bc);
         g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
       });
     }
@@ -339,12 +348,13 @@
     const w = canvas.width, hh = canvas.height, g = canvas.getContext('2d');
     g.clearRect(0, 0, w, hh);
     const n = 13, y = hh * 0.5;
+    const [bs, bc] = dimOf(p);
     for (let j = 0; j < n; j++) {
       const x = w * (0.06 + 0.88 * (j + 0.5) / n);
       const [c, a] = colAt(stripIndex(j, p, n), p, t);
-      g.fillStyle = rgba(c, 0.3 * a);
+      g.fillStyle = rgba(c, 0.3 * a * bs);
       g.beginPath(); g.arc(x, y, hh * 0.11, 0, 7); g.fill();
-      g.fillStyle = rgba(c, Math.min(1, 0.25 + a));
+      g.fillStyle = rgba(c, Math.min(1, 0.25 + a * bs) * bc);
       g.beginPath(); g.arc(x, y, hh * 0.045, 0, 7); g.fill();
     }
   }
@@ -379,6 +389,7 @@
       if (pending) return;
       S = s;
       fixSel();
+      checkTry();
       renderView();
     } catch (e) { /* keep the last state */ }
   }
@@ -416,6 +427,8 @@
   // ------------------------------------------------------------ lights switch (off = preview on the picture only)
   // The switch mirrors the real lights: it is on when any selected controller is on.
   let PV = null; // { ref, pat } previewed on the picture while the lights are off
+  // Create's "Show on house" try: { prevName, prevOn, undo, ids, timer } while the design is on the lights.
+  let T = null;
   const lightsOn = () => selCtrls().some((c) => c.state && c.state.on);
   function choose(ref, pat) {
     if (lightsOn()) { PV = null; play(ref, pat); return; }
@@ -425,12 +438,7 @@
   async function setLights(on) {
     const list = selCtrls(), ids = sel.slice();
     if (!list.length) return;
-    if (on && view === 'create') {
-      const body = { ids, pattern: spec() }, pat = previewPattern();
-      toast(['Live: changes show on ', { b: namesOf(list) }]);
-      await optimistic(list, () => list.forEach((c) => { c.state = { on: true, pattern: pat }; }),
-        () => api(url('live'), body));
-    } else if (on && PV) {
+    if (on && PV) {
       const p = PV; PV = null;
       await play(p.ref, p.pat);
     } else {
@@ -446,11 +454,13 @@
       b.querySelector('.g-st').textContent = on ? 'LIVE' : 'PREVIEW';
       b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
-    ['t-hero', 'c-hero'].forEach((id) => {
-      const el = $(id);
-      el.classList.toggle('g-lv', on);
-      el.classList.toggle('g-pvw', !on && (id === 'c-hero' || !!PV));
-    });
+    const t = $('t-hero'), c = $('c-hero');
+    t.classList.toggle('g-lv', on);
+    t.classList.toggle('g-pvw', !on && !!PV);
+    // Create is a fitting room: only a "Show on house" try puts it on the lights.
+    c.classList.toggle('g-lv', !!T);
+    c.classList.toggle('g-pvw', !T);
+    c.classList.toggle('c-try', !!T);
   }
   if (!SETUP) root.querySelectorAll('[data-lights]').forEach((b) => { b.onclick = () => setLights(!lightsOn()); });
   // What the Tonight / Patterns pictures show: the preview while the lights are off, else the real lights.
@@ -501,7 +511,7 @@
     if (PV && !lightsOn() && PV.pat.id === p.id) {
       c.classList.add('g-pvw'); c.appendChild(h('span', 'pl g-pvb', 'PREVIEW'));
     } else if (first && first.state && first.state.on && first.state.pattern && first.state.pattern.id === p.id) {
-      c.classList.add('on'); c.appendChild(h('span', 'pl', 'ON LIGHTS'));
+      c.classList.add('on'); c.appendChild(h('span', 'pl', 'LIVE'));
     }
     const more = h('button', 'more', '⋯');
     more.title = 'Open in Create';
@@ -532,6 +542,7 @@
     // The old Patterns page is now the "All patterns" part of Tonight.
     const toAll = v === 'patterns';
     if (!VIEWS.includes(v)) v = 'tonight';
+    if (T && view === 'create' && v !== 'create') endTry(true, true);
     view = v;
     closePop();
     renderView();
@@ -540,9 +551,6 @@
   if (!SETUP) window.addEventListener('hashchange', routeFromHash);
 
   function renderShell() {
-    const who = $('gs-who');
-    who.textContent = S.admin ? 'Admin' : 'Guest';
-    who.classList.toggle('admin', !!S.admin);
     root.querySelectorAll('.ri').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
     VIEWS.forEach((v) => { $('v-' + v).hidden = v !== view; });
     renderMsg();
@@ -579,7 +587,10 @@
   }
 
   // ------------------------------------------------------------ tonight
-  let bright = null, brightTimer = null;
+  let bright = null, brightTimer = null, brightLive = false;
+  // While the brightness slider is moving the pictures follow it before the lights do.
+  const withBright = (p) => (brightLive && p && bright != null
+    ? Object.assign({}, p, { brightness: Math.round(Math.max(1, bright) * 255 / 100) }) : p);
   function statusLine(list) {
     const on = list.filter((c) => c.state && c.state.on);
     if (!list.length) return '';
@@ -1127,7 +1138,7 @@
   }
   // The pinned bar's slider and the main one are the same control.
   const onBright = (src) => (v) => {
-    $('t-bval').textContent = $('m-bval').textContent = Math.max(1, v) + '%'; bright = v;
+    $('t-bval').textContent = $('m-bval').textContent = Math.max(1, v) + '%'; bright = v; brightLive = true;
     ['t-bslider', 'm-bslider'].forEach((id) => { if ($(id) !== src) setSlider($(id), v); });
   };
   const commitBright = (v) => {
@@ -1136,7 +1147,7 @@
         const pct = Math.max(1, v), list = selCtrls();
         const old = list.map((c) => [c, c.state && c.state.pattern && c.state.pattern.brightness]);
         list.forEach((c) => { if (c.state && c.state.pattern) c.state.pattern.brightness = Math.round(pct * 255 / 100); });
-        brightTimer = null;
+        brightTimer = null; brightLive = false;
         pending++;
         try {
           await api(url('brightness'), { ids: sel, brightness: pct });
@@ -1153,10 +1164,11 @@
   const QUICK = [['Red', '#e3262b'], ['Green', '#1fa64a'], ['Warm white', '#fdf4bc'], ['Gold', '#ffb800'], ['Blue', '#2f6bff'],
     ['Purple', '#8b3dff'], ['Orange', '#ff7a1a'], ['Pink', '#ff4fa3'], ['White', '#ffffff'], ['Teal', '#14b8a6']];
   const C = { design: null, id: '', folder: null, selIdx: 0, more: false, dirty: false,
-    saving: false, again: false, saveT: null, liveT: null, guestName: '' };
+    saving: false, again: false, saveT: null, liveT: null };
+  const untitled = () => nextUntitled(OURS ? OURS.patterns.map((p) => p.name) : []);
   function newDesign() {
-    C.design = { colors: ['#e3262b', '#1fa64a', '#fdf4bc', '#ffb800'], animation: 'starry', brightness: 100, speed: 128, direction: 0, name: 'Untitled design' };
-    C.id = ''; C.folder = null; C.selIdx = 0; C.dirty = false; C.guestName = '';
+    C.design = { colors: ['#e3262b', '#1fa64a', '#fdf4bc', '#ffb800'], animation: 'starry', brightness: 100, speed: 128, direction: 0, name: untitled() };
+    C.id = ''; C.folder = null; C.selIdx = 0; C.dirty = false;
     if (!SETUP) savedText('');
   }
   newDesign();
@@ -1169,13 +1181,14 @@
     newDesign();
     C.design = { colors: (p.colors || ['#fff1e0']).slice(0, 20), animation: p.animation || 'motionless',
       brightness: clamp(Math.round((p.brightness == null ? 255 : p.brightness) * 100 / 255), 1, 100),
-      speed: p.speed == null ? 128 : p.speed, direction: p.direction || 0, name: p.name || 'Untitled design' };
+      speed: p.speed == null ? 128 : p.speed, direction: p.direction || 0, name: p.name || untitled() };
     const folder = OURS && p.folder ? OURS.folders.find((f) => f.id === p.folder) : null;
     if (folder && !folder.managed && (S.admin || folder.guest)) {
       C.id = p.id; C.folder = { id: folder.id, name: folder.name };
-      if (!S.admin) C.guestName = p.name;
-    } else if (S.admin) {
-      C.design.name = p.name ? p.name + ' (copy)' : 'Untitled design';
+    } else if (S.admin && p.name) {
+      C.design.name = p.name + ' (copy)';
+    } else {
+      C.design.name = untitled();
     }
     C.more = !STILL.has(C.design.animation) && !S.animations.some((a) => a.name === C.design.animation);
     C.more = C.more || S.more_animations.includes(C.design.animation);
@@ -1199,7 +1212,7 @@
     clearTimeout(C.saveT);
     savedText('Saving\u2026', 'wait');
     C.saveT = setTimeout(saveDesign, 1500);
-    if (lightsOn()) { clearTimeout(C.liveT); C.liveT = setTimeout(pushLive, 800); }
+    if (T) { tryIdle(); clearTimeout(C.liveT); C.liveT = setTimeout(pushLive, 800); }
   }
   async function saveDesign() {
     if (C.saving) { C.again = true; return; }
@@ -1209,7 +1222,7 @@
       const r = await api(url('design'), { pattern: spec(), id: C.id, folder: f.id, name: C.design.name });
       C.id = r.id;
       C.folder = r.folder;
-      if (!S.admin) C.guestName = r.name;
+      if (r.name && document.activeElement !== $('c-title')) C.design.name = r.name;
       C.dirty = false;
       savedText('✓ Saved');
       if (OURS) loadOurs(true).catch(() => {});
@@ -1225,18 +1238,103 @@
   // One live push at a time; edits made while one is in flight send just the latest spec after it.
   async function pushLive() {
     if (C.pushing) { C.pushAgain = true; return; }
+    if (!T) return;
     C.pushing = true;
-    try { await api(url('live'), { ids: sel.slice(), pattern: spec() }); } catch (e) { fail(e); }
+    const ids = T.ids, list = ids.map(ctrlById).filter(Boolean), pat = previewPattern();
+    list.forEach((c) => { c.state = { on: true, pattern: Object.assign({ name: C.design.name }, pat) }; });
+    pending++;
+    T.at = Date.now();
+    try { await api(url('live'), { ids, pattern: spec() }); } catch (e) { fail(e); }
     finally {
+      pending--;
+      if (T) T.at = Date.now();
       C.pushing = false;
-      if (C.pushAgain) { C.pushAgain = false; if (lightsOn()) pushLive(); }
+      if (C.pushAgain) { C.pushAgain = false; if (T) pushLive(); }
     }
   }
+
+  // ---- fitting room: Create only reaches the lights through an explicit "Show on house" try,
+  // which remembers what was playing and puts it back on Back, on leaving Create, or after idling.
+  const TRY_IDLE_MS = 10 * 60 * 1000;
+  function tryIdle() {
+    if (!T) return;
+    clearTimeout(T.timer);
+    T.timer = setTimeout(() => endTry(true, true), TRY_IDLE_MS);
+  }
+  function houseNow() {
+    const c = selCtrls()[0], st = (c && c.state) || {};
+    return { on: !!st.on, name: st.on && st.pattern ? st.pattern.name || 'a pattern' : '' };
+  }
+  async function startTry() {
+    const list = selCtrls(), ids = sel.slice();
+    if (!list.length || T) return;
+    const h0 = houseNow();
+    T = { prevName: h0.name, prevOn: h0.on, undo: null, ids, timer: null, at: Date.now(), before: list.map((c) => [c, c.state]) };
+    clearTimeout(C.liveT);
+    const pat = Object.assign({ name: C.design.name }, previewPattern());
+    list.forEach((c) => { c.state = { on: true, pattern: pat }; });
+    tryIdle();
+    renderView();
+    pending++;
+    try {
+      const r = await api(url('live'), { ids, pattern: spec(), start: true });
+      if (T) T.undo = (r && r.undo) || null;
+    } catch (e) {
+      const t = T; T = null;
+      if (t) { clearTimeout(t.timer); t.before.forEach(([c, st]) => { c.state = st; }); }
+      renderView();
+      toast('Couldn\u2019t reach the lights', true, { label: 'Try again', onTap: startTry });
+    } finally {
+      pending--;
+      if (!pending) refreshSoon(2000);
+    }
+  }
+  function keepTry() {
+    if (!T) return;
+    clearTimeout(T.timer);
+    T = null;
+    renderView();
+  }
+  // Put the house back to what it showed before the try. ``told`` = say so in a toast with "Show it again".
+  async function endTry(revert, told) {
+    const t = T;
+    if (!t) return;
+    clearTimeout(t.timer);
+    clearTimeout(C.liveT);
+    T = null;
+    if (revert) {
+      const list = t.ids.map(ctrlById).filter(Boolean);
+      t.before.forEach(([c, st]) => { c.state = st; });
+      renderView();
+      pending++;
+      try {
+        if (t.undo) await api(url('undo'), { token: t.undo });
+        else if (!t.prevOn && list.length) await api(url('power'), { ids: t.ids, on: false });
+      } catch (e) { fail(e); }
+      finally { pending--; if (!pending) refreshSoon(2000); }
+    } else renderView();
+    if (told) {
+      toast([C.dirty || C.id ? 'Your design was saved. ' : '', 'The house is back to ', { b: t.prevOn ? t.prevName : 'off' }, '.'],
+        false, { label: 'Show it again', onTap: () => { if (view !== 'create') location.hash = '#create'; startTry(); } });
+    }
+  }
+  // Polled state shows the lights changed under us (someone played something else): the try is over.
+  function checkTry() {
+    if (!T || pending || C.pushing || Date.now() - T.at < 20000) return;
+    const c = T.ids.map(ctrlById).filter(Boolean)[0], st = c && c.state;
+    if (!st) return;
+    if (st.on && sameDesign(st.pattern, spec())) return;
+    clearTimeout(T.timer);
+    T = null;
+    toast(st.on ? ['Someone changed the lights to ', { b: (st.pattern && st.pattern.name) || 'another pattern' }]
+      : ['Someone turned the lights off'], false, { label: 'Show my design again', onTap: startTry });
+  }
+
   function renderCreateHeader() {
     const t = $('c-title');
-    t.contentEditable = S.admin ? 'true' : 'false';
-    if (document.activeElement !== t) t.textContent = S.admin ? C.design.name : (C.guestName || 'Guest design · named when saved');
-    $('c-pen').hidden = !S.admin;
+    t.contentEditable = 'true';
+    if (document.activeElement !== t) t.textContent = C.design.name;
+    $('c-pen').hidden = false;
     const f = defaultFolder(), fb = $('c-fold');
     fb.textContent = '';
     if (S.admin) { fb.append(document.createTextNode('📁 ' + f.name + ' ')); fb.appendChild(h('small', '', '▾')); }
@@ -1249,7 +1347,14 @@
     const sc = heroScene('c', $('c-hero'));
     sc.set(list[0]);
     renderCreateHeader();
-    $('c-a').textContent = lightsOn() ? 'Live on ' + namesOf(list.filter((c) => c.state && c.state.on)) : 'Preview · real lights unchanged';
+    $('c-a').textContent = T ? 'Live' : 'Preview';
+    const hn = houseNow(), hs = $('c-house');
+    hs.hidden = !!T || !list.length;
+    hs.classList.toggle('off', !hn.on);
+    $('c-house-name').textContent = hn.on ? hn.name : 'Off';
+    $('c-show').hidden = !!T || !list.length;
+    $('c-bar').hidden = !T;
+    if (T) $('c-revert').textContent = T.prevOn ? '\u21ba Back to ' + T.prevName : '\u21ba Turn lights off';
     const ps = $('c-pswatch'); ps.textContent = '';
     C.design.colors.forEach((c) => { const i = h('i'); i.style.background = c; ps.appendChild(i); });
     // colours
@@ -1311,9 +1416,12 @@
   $('c-back').onclick = () => { location.hash = '#tonight'; };
   const title = $('c-title');
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
+  $('c-show').onclick = () => startTry();
+  $('c-keep').onclick = () => keepTry();
+  $('c-revert').onclick = () => endTry(true, false);
+  $('c-house').onclick = () => { location.hash = '#tonight'; };
   title.addEventListener('blur', () => {
-    if (!S.admin) return;
-    const n = title.textContent.replace(/\s+/g, ' ').trim().slice(0, 60) || 'Untitled design';
+    const n = title.textContent.replace(/\s+/g, ' ').trim().slice(0, 60) || 'Untitled';
     if (n !== C.design.name) { C.design.name = n; changed(); } else title.textContent = n;
   });
   $('c-pen').onclick = () => { title.focus(); };
@@ -1653,7 +1761,8 @@
     const t = tick / 4;
     const first = selCtrls()[0], st = (first && first.state) || {}, sh = shown(first);
     if (view === 'tonight') {
-      scenes.t && scenes.t.draw(sh.pattern, sh.on, t);
+      const pat = withBright(sh.pattern);
+      scenes.t && scenes.t.draw(pat, sh.on, t);
       $('t-insets').querySelectorAll('.inset').forEach((b, i) => {
         const c = selCtrls()[i + 1];
         if (b._scene && c) b._scene.draw(c.state && c.state.pattern, c.state && c.state.on, t);
@@ -1661,8 +1770,8 @@
       if (pinned) {
         const pc = $('m-ph');
         pc.classList.toggle('g-dim', !sh.on);
-        if (miniPhoto(first)) scenes.m && scenes.m.draw(sh.pattern, sh.on, t);
-        else if (sh.pattern) strip(pc.querySelector('canvas.g-mstrip'), sh.pattern, t);
+        if (miniPhoto(first)) scenes.m && scenes.m.draw(pat, sh.on, t);
+        else if (pat) strip(pc.querySelector('canvas.g-mstrip'), pat, t);
       }
     } else if (view === 'create') {
       const p = previewPattern();

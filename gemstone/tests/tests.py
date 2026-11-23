@@ -255,6 +255,20 @@ class ServiceTests(Fresh, TestCase):
         with self.assertRaises(service.Invalid):
             service.undo(out["undo"])
 
+    def test_show_on_house_try_reverts_to_what_was_playing(self):
+        """Create's "Show on house" must be undoable back to the old pattern, and off stays off."""
+        spec = {"colors": ["#ff0000"], "animation": "chase", "name": "Mine"}
+        out = service.live(["house", "tub"], spec, start=True)
+        self.assertIn("undo", out)
+        self.assertEqual(self.fake.states["house"]["pattern"]["name"], "Mine")
+        self.assertTrue(self.fake.states["tub"]["onState"])
+        # Later edits during the try don't take a new snapshot (that would undo to the design).
+        self.assertNotIn("undo", service.live(["house", "tub"], dict(spec, colors=["#00ff00"])))
+        service.undo(out["undo"])
+        self.assertEqual(self.fake.states["house"]["pattern"]["name"], "Warm white")
+        self.assertEqual(self.fake.states["tub"]["pattern"]["name"], "Blue")
+        self.assertFalse(self.fake.states["tub"]["onState"])
+
     def test_play_saved_and_library_patterns_by_id(self):
         service.play(["tub"], {"id": "p-lib"})
         service.play(["house"], {"id": "p-ours"})
@@ -315,7 +329,7 @@ class ServiceTests(Fresh, TestCase):
         out = service.save_design(spec, admin=False, folder_id="f-ours", name="Mine", now=self.local(20, 5))
         self.assertTrue(out["locked"])
         self.assertEqual(out["folder"]["name"], "Guest designs")
-        self.assertEqual(out["name"], "Guest design · 2026-11-21 20:05")
+        self.assertEqual(out["name"], "Mine")
         self.assertEqual([a[1] for a in self.fake.ops("save_folder")], ["Guest designs"])
         guest_id = out["folder"]["id"]
         self.assertEqual(self.fake.ops("save_pattern")[-1][0], guest_id)
@@ -714,6 +728,8 @@ class ViewTests(Fresh, TestCase):
             spec = {"colors": ["#ff0000", "#00ff00"], "animation": anim}
             r = self.post("gemstone_live", {"ids": ["house", "tub"], "pattern": spec})
             self.assertEqual(r.status_code, 200, (anim, r.content))
+        r = self.post("gemstone_live", {"ids": ["house"], "pattern": {"colors": ["#ff0000"]}, "start": True})
+        self.assertEqual(self.post("gemstone_undo", {"token": r.json()["undo"]}).status_code, 200)
         for ref in ({"kind": "solid", "color": "#00ff00", "name": "Green"},
                     {"kind": "solid", "color": service.WARM_HEX},
                     {"kind": "spec", "spec": {"colors": ["#0000ff"], "animation": "chase"}}):
@@ -740,10 +756,12 @@ class ViewTests(Fresh, TestCase):
         self.assertEqual(self.client.get(reverse("gemstone_layout", args=["house"])).status_code, 200)
         self.assertEqual(self.client.get(reverse("gemstone_layout", args=["nope"])).status_code, 404)
 
-    def test_guest_design_ignores_folder_and_name(self):
-        r = self.post("gemstone_design", {"pattern": {"colors": ["#ff0000"]}, "folder": "f-ours", "name": "Mine"})
+    def test_guest_design_ignores_folder_keeps_name(self):
+        r = self.post("gemstone_design", {"pattern": {"colors": ["#ff0000"]}, "folder": "f-ours", "name": "  Mine \n "})
         self.assertEqual(r.json()["folder"]["name"], "Guest designs")
-        self.assertTrue(r.json()["name"].startswith("Guest design · "))
+        self.assertEqual(r.json()["name"], "Mine")
+        r = self.post("gemstone_design", {"pattern": {"colors": ["#ff0000"]}})
+        self.assertEqual(r.json()["name"], "Untitled")
         folders = self.client.get(reverse("gemstone_ours")).json()["folders"]
         self.assertEqual({f["name"]: f["locked"] for f in folders},
                          {"Our designs": True, "Holidays": True, "Guest designs": False})

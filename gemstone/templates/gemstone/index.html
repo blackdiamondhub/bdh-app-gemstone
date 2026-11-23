@@ -28,8 +28,6 @@
   <nav class="gs-rail" id="gs-rail">
     <a class="ri" data-view="tonight" href="#tonight"><i>🌙</i>Tonight</a>
     <a class="ri" data-view="create" href="#create"><i>🎨</i>Create</a>
-    <span class="sp"></span>
-    <span class="who" id="gs-who">Guest</span>
   </nav>
 
   <main class="gs-main">
@@ -87,15 +85,18 @@
     <!-- Create -->
     <section class="pg c-pg" id="v-create" hidden>
       <div class="c-left">
-        <div class="hdr"><button class="g-btn c-back" id="c-back" aria-label="Back to Tonight">‹ Back</button><h1 id="c-title" spellcheck="false">Untitled design</h1><span class="c-pen" id="c-pen">✎</span>
+        <div class="hdr"><button class="g-btn c-back" id="c-back" aria-label="Back to Tonight">‹ Back</button><h1 id="c-title" spellcheck="false" contenteditable="true">Untitled</h1><span class="c-pen" id="c-pen">✎</span>
           <span class="grow"></span><span class="saved" id="c-saved"></span>
           <button class="g-btn c-new" id="c-new">＋ New</button>
           <button class="fold" id="c-fold">📁 —</button></div>
         <div class="hero c-hero" id="c-hero">
-          <button class="g-lights" data-lights aria-pressed="false" aria-label="Lights: preview or live">💡 Lights<span class="g-st">PREVIEW</span><span class="g-sw"></span></button>
+          <a class="c-house" id="c-house" href="#tonight"><i></i><span>On house:</span><b id="c-house-name">—</b><span>›</span></a>
+          <div class="c-bar" id="c-bar" hidden><span class="dot"></span><span>Live on house</span><span class="grow"></span>
+            <button class="c-revert" id="c-revert">↺ Back</button><button class="c-keep" id="c-keep">✓ Keep it</button></div>
           <div class="dev m gs-float" data-chips></div>
           <div class="stat"><div class="a" id="c-a">Preview</div><div class="b" id="c-pname"></div><div class="sw" id="c-pswatch"></div></div>
         </div>
+        <button class="c-show" id="c-show"><span>💡</span><span>Show on house</span></button>
       </div>
       <div class="c-right">
         <div class="f"><label>Colours · <span id="c-count"></span> <span class="t3">tap one to change it</span></label>
@@ -116,7 +117,7 @@
   </main>
 
   <div class="pop" id="gs-pop" hidden></div>
-  <div class="g-toast" id="gs-toast" hidden><span id="gs-toast-text"></span></div>
+  <div class="g-toast" id="gs-toast" hidden><span id="gs-toast-text"></span><button class="g-tact" id="gs-toast-act" hidden></button></div>
 </div>
 
 {{ state|json_script:"gs-initial" }}

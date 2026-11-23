@@ -143,3 +143,32 @@ test('orderGroup: most played, then most recent, then downloads, then original o
   assert.deepEqual(core.orderGroup(pats).map((p) => p.id), ['c', 'a', 'b', 'd', 'e']);
   assert.equal(core.GROUP_PAGE, 18);
 });
+
+test('nextUntitled: Untitled, then the first free (n), ignoring case and spaces', () => {
+  assert.equal(core.nextUntitled([]), 'Untitled');
+  assert.equal(core.nextUntitled(['Sunset']), 'Untitled');
+  assert.equal(core.nextUntitled([' untitled ']), 'Untitled (1)');
+  assert.equal(core.nextUntitled(['Untitled', 'Untitled (1)', 'Untitled (3)']), 'Untitled (2)');
+});
+
+test('sameDesign: matches on animation and colours only', () => {
+  const spec = { animation: 'twinkle', colors: ['#FF0000', '#00ff00'], name: 'Mine', brightness: 200 };
+  assert.ok(core.sameDesign({ animation: 'twinkle', colors: ['#ff0000', '#00FF00'], name: 'Renamed', brightness: 40 }, spec));
+  assert.ok(!core.sameDesign({ animation: 'chase', colors: spec.colors }, spec));
+  assert.ok(!core.sameDesign({ animation: 'twinkle', colors: ['#ff0000'] }, spec));
+  assert.ok(core.sameDesign({ colors: [] }, { animation: 'motionless', colors: [] }));
+  assert.ok(!core.sameDesign(null, spec));
+});
+
+test('dimOf: brightness dims both glow and core, monotonically, never to black', () => {
+  assert.deepEqual(core.dimOf({ brightness: 255 }), [1, 1]);
+  assert.deepEqual(core.dimOf({}), [1, 1]);
+  let prev = [-1, -1];
+  for (let b = 0; b <= 255; b += 5) {
+    const d = core.dimOf({ brightness: b });
+    assert.ok(d[0] > prev[0] && d[1] > prev[1], 'not increasing at ' + b);
+    assert.ok(d[0] > 0.2 && d[1] > 0.2 && d[0] <= 1 && d[1] <= 1);
+    prev = d;
+  }
+  assert.ok(core.dimOf({ brightness: 60 })[1] < 0.6, 'core must dim visibly for the slim preview');
+});

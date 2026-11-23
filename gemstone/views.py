@@ -195,7 +195,7 @@ def design(request):
     admin = is_admin(request)
     out = service.save_design(b.get("pattern"), admin=admin, design_id=b.get("id", ""),
                               folder_id=b.get("folder", "") if admin else "",
-                              name=b.get("name", "") if admin else "")
+                              name=b.get("name", ""))
     return JsonResponse(out)
 
 
@@ -210,7 +210,7 @@ def fav(request):
 @_guarded
 def live(request):
     b = _body(request)
-    return JsonResponse(service.live(b.get("ids"), b.get("pattern")))
+    return JsonResponse(service.live(b.get("ids"), b.get("pattern"), start=bool(b.get("start"))))
 
 
 @require_POST
