@@ -1,6 +1,6 @@
 # bdh-app-gemstone
 
-A [Black Diamond Hub](https://github.com/blackdiamondlodge/BlackDiamondHub) app for
+A [Black Diamond Hub](https://github.com/blackdiamondhub/BlackDiamondHub) app for
 [Gemstone Lights](https://gemstonelights.com/) permanent outdoor lighting. It talks to the
 Gemstone cloud through [pygemstone](https://pypi.org/project/pygemstone/) and works with any
 number of controllers.
