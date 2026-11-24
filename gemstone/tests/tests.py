@@ -322,10 +322,70 @@ class ServiceTests(Fresh, TestCase):
         self.assertEqual(len(self.fake.ops("play")), 1)
 
     def test_colour_round_trip(self):
-        for color in ("#ff0000", "#00ff00", "#0000ff", "#123456", service.WARM_HEX):
+        for color in ("#ff0000", "#00ff00", "#0000ff", "#ffffff", service.WARM_HEX):
             self.assertEqual(service.int_to_hex(service.hex_to_int(color)), color)
+        # Device colours survive display -> device to within rounding (what a saved design sends back).
+        for device in (0xFF, 0x1EFF, 0x7A00FF, 0xFF5700, 0x123456, 0x80FF80):
+            back = service.hex_to_int(service.int_to_hex(device))
+            for shift in (0, 8, 16):
+                self.assertLessEqual(abs((back >> shift & 0xFF) - (device >> shift & 0xFF)), 1, hex(device))
         with self.assertRaises(service.Invalid):
             service.hex_to_int("red")
+
+    def test_device_colours_display_as_they_look(self):
+        """"1 on, 3 off Orange" is (255, 30, 0) on the LEDs, which showed as red on screen."""
+        hexc = service.int_to_hex(0x1EFF)  # r=255 g=30 b=0
+        r, g, b = int(hexc[1:3], 16), int(hexc[3:5], 16), int(hexc[5:7], 16)
+        self.assertEqual((r, b), (255, 0))
+        self.assertGreater(g, 100, f"{hexc} should read as orange, not red")
+        self.assertEqual(service.int_to_hex(0xFF0000), "#0000ff")  # pure colours are unchanged
+
+    def test_pattern_params_and_background(self):
+        raw = dict(pat("p-acc", "1 on, 3 off Orange", (0x1EFF,), "accent"), backgroundColor=0xFF0000,
+                   extraParameters={"0": {"value": 1}, "1": {"value": 3}, "version": 0})
+        out = service.pattern_json(Pattern.from_api(raw))
+        self.assertEqual(out["params"], {"on": 1, "off": 3})
+        self.assertEqual(out["background"], "#0000ff")
+        # Parameters this animation doesn't draw are dropped; silly values clamped.
+        self.assertEqual(service.params_json("chase", raw["extraParameters"]), {})
+        self.assertEqual(service.params_json("smooth", {"0": {"value": 9999}, "1": {"value": -4}}),
+                         {"length": service.PARAM_MAX, "spacing": 0})
+        p = service.pattern_from_spec({"colors": ["#ff7700"], "animation": "accent", "background": "#0000ff",
+                                       "params": {"on": 2, "off": 5, "length": 9}})
+        self.assertEqual(p.extra_parameters, {"0": {"name": "On Length", "value": 2},
+                                              "1": {"name": "Off Length", "value": 5}, "version": 0})
+        self.assertEqual(p.background_color, 0xFF0000)
+        self.assertIsNone(service.pattern_from_spec({"colors": ["#ff0000"], "animation": "chase",
+                                                     "params": {"on": 2}}).extra_parameters)
+        self.assertEqual(service.pattern_json(p)["params"], {"on": 2, "off": 5})
+
+    def test_solid_ids_match_the_ui(self):
+        """gemstone.js builds the same id from the swatch hex, so the playing swatch lights up."""
+        self.assertEqual(service.solid_id("#FF7A1A"), service.SOLID_ID_PREFIX + "ff7a1a")
+        with self.assertRaises(service.Invalid):
+            service.solid_id("orange")
+
+    def test_outside_plays_count_once(self):
+        """A design started in the Gemstone app shows in Recently played."""
+        self.assertEqual(service.note_outside_plays(NOW), ["p-warm"])  # first look: what's on counts
+        self.assertEqual(service.note_outside_plays(NOW), [])
+        self.fake.states["house"]["pattern"] = pat("p-ios", "1 on, 3 off Orange", (0x1EFF,), "accent")
+        self.fake.states["tub"] = {"id": "tub", "onState": True, "pattern": pat("p-ios", "1 on, 3 off Orange")}
+        cloud.forget("state:")
+        self.assertEqual(service.note_outside_plays(NOW), ["p-ios"])  # two controllers, one play
+        self.assertEqual(service.plays()["p-ios"]["n"], 1)
+        self.assertEqual(service.note_outside_plays(NOW), [])
+        self.assertEqual(service.plays()["p-ios"]["n"], 1)
+
+    def test_outside_plays_ignore_hub_plays_and_lights_off(self):
+        service.note_outside_plays(NOW)
+        service.play(["house"], {"id": "p-ours"})
+        cloud.forget("state:")
+        self.assertEqual(service.note_outside_plays(NOW), [])
+        self.assertEqual(service.plays()["p-ours"]["n"], 1)
+        self.fake.states["tub"]["pattern"] = pat("p-off", "Off one")  # tub is off
+        cloud.forget("state:")
+        self.assertEqual(service.note_outside_plays(NOW), [])
 
     def test_pattern_spec_validation(self):
         p = service.pattern_from_spec({"colors": ["#ff0000"], "animation": "chase", "brightness": 50})
@@ -441,6 +501,13 @@ class WorkerTests(Fresh, TestCase):
         cloud.forget("state:")
         worker.tick(self.local(21, 5))
         self.assertFalse(self.fake.states["house"]["onState"])
+
+    def test_tick_counts_designs_started_elsewhere(self):
+        worker.tick(self.local(12))
+        self.fake.states["house"]["pattern"] = pat("p-ios", "From the phone")
+        cloud.forget("state:")
+        worker.tick(self.local(12, 1))
+        self.assertIn("p-ios", service.plays())
 
     def test_should_start(self):
         self.assertTrue(worker.should_start(["/x/bdh_sdk/runtime/__main__.py"]))

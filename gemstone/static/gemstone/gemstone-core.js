@@ -63,24 +63,53 @@
     motionless: 'solid', starry: 'twinkle', glitter: 'twinkle', flicker: 'twinkle', glitch: 'twinkle',
     chase: 'chase', marquee: 'chase', pacman: 'chase', ghost: 'chase', pyramid_chase: 'chase',
     wave: 'wave', gradient_wave: 'wave', sway: 'wave', pulse: 'pulse', multipulse: 'pulse', tremor: 'pulse',
-    fade: 'fade', isofade: 'fade', smooth: 'fade', fireworks: 'fireworks',
+    fade: 'fade', isofade: 'isofade', smooth: 'smooth', fireworks: 'fireworks', accent: 'accent',
   };
-  const STILL = new Set(['motionless', 'starry', 'fade', 'pulse', 'flicker', 'glitter']);
+  const STILL = new Set(['motionless', 'starry', 'fade', 'pulse', 'flicker', 'glitter', 'accent']);
+  // A design's lengths (from the cloud's extraParameters), with the controller's defaults.
+  const pint = (v, d) => { const x = Math.round(Number(v)); return v != null && x >= 0 && x <= 200 ? x : d; };
+  function lengths(p) {
+    const q = p.params || {};
+    switch (MODES[p.animation]) {
+      case 'accent': case 'isofade':
+        return { on: Math.max(1, pint(q.on, 1)), off: pint(q.off, p.animation === 'accent' ? 3 : 0) };
+      case 'smooth': return { on: Math.max(1, pint(q.length, 10)), off: pint(q.spacing, 0) };
+      case 'solid': return { on: Math.max(1, pint(q.length, 1)), off: 0 };
+      default: return null;
+    }
+  }
+  // An unlit LED: the design's background colour, or dark.
+  const OFF = (p) => (p.background ? [p.background, 1] : ['#000000', 0]);
+  // A dimmed LED in modes that dim rather than switch off: the background replaces the dim.
+  const dim = (p, c, a) => (p.background ? [p.background, 1] : [c, a]);
   // Colour and brightness (0..1) of LED ``i`` for pattern ``p`` at time ``t`` seconds.
   function colAt(i, p, t) {
     const cs = p.colors && p.colors.length ? p.colors : ['#fff1e0'];
     const n = cs.length;
     const T = t * (0.25 + 1.5 * ((p.speed == null ? 128 : p.speed) / 255)) * (p.direction === 1 ? -1 : 1);
     switch (MODES[p.animation] || 'flow') {
-      case 'solid': return [cs[i % n], 1];
-      case 'twinkle': return [cs[i % n], rnd(i * 7 + Math.floor(Math.abs(T) * 3)) > 0.72 ? 1 : 0.22];
-      case 'chase': { const s = Math.floor(T * 6); return [cs[mod(Math.floor((i - s) / 4), n)], mod(i - s, 8) < 5 ? 1 : 0.06]; }
+      case 'solid': return [cs[Math.floor(i / lengths(p).on) % n], 1];
+      case 'accent': {
+        const L = lengths(p), g = L.on + L.off;
+        return mod(i, g) < L.on ? [cs[Math.floor(i / g) % n], 1] : OFF(p);
+      }
+      case 'isofade': {
+        const L = lengths(p), g = L.on + L.off;
+        if (mod(i, g) >= L.on) return OFF(p);
+        return [cs[mod(Math.floor(i / g) + Math.floor(Math.abs(T) / 1.5), n)], 0.55 + 0.45 * Math.abs(Math.sin(Math.abs(T) * 2.1))];
+      }
+      case 'smooth': {
+        const L = lengths(p), g = L.on + L.off, x = i - T * 8;
+        return mod(x, g) < L.on ? [cs[mod(Math.floor(x / g), n)], 1] : OFF(p);
+      }
+      case 'twinkle': return rnd(i * 7 + Math.floor(Math.abs(T) * 3)) > 0.72 ? [cs[i % n], 1] : dim(p, cs[i % n], 0.22);
+      case 'chase': { const s = Math.floor(T * 6), c = cs[mod(Math.floor((i - s) / 4), n)]; return mod(i - s, 8) < 5 ? [c, 1] : dim(p, c, 0.06); }
       case 'wave': return [cs[mod(Math.floor((i / 9 - T * 2) / Math.PI), n)], 0.2 + 0.8 * (Math.sin(i / 9 - T * 2) + 1) / 2];
       case 'pulse': return [cs[Math.floor(i / 12) % n], 0.25 + 0.75 * (Math.sin(Math.abs(T) * 2.5 + i / 40) + 1) / 2];
       case 'fade': return [cs[mod(Math.floor(i / 50) + Math.floor(Math.abs(T) / 1.5), n)], 0.55 + 0.45 * Math.abs(Math.sin(Math.abs(T) * 2.1))];
       case 'fireworks': {
         const b = Math.floor(i / 40), ph = mod(Math.abs(T) * 0.8 + rnd(b) * 3, 3), d = Math.abs((i % 40) - 20);
-        return [cs[b % n], ph < 1 && d < ph * 20 ? 1 - ph * 0.7 : 0.05];
+        return ph < 1 && d < ph * 20 ? [cs[b % n], 1 - ph * 0.7] : dim(p, cs[b % n], 0.05);
       }
       default: return [cs[mod(Math.floor((i - T * 8) / 20), n)], 1];
     }
@@ -90,16 +119,21 @@
   // The LED index that dot ``j`` of an ``n``-dot strip preview samples. The dots
   // span exactly one cycle of the pattern's colours, closer together than a band,
   // so every colour shows (a 3-colour motionless strip was all red at j*3 spacing).
+  // Spaced designs (accent, isofade) sample LED by LED so the gaps show.
   function stripIndex(j, p, n) {
     n = n || 13;
     const mode = MODES[p.animation] || 'flow';
-    if (mode === 'solid' || mode === 'twinkle') return j;
+    if (mode === 'twinkle' || mode === 'accent' || mode === 'isofade') return j;
     const k = Math.max(1, (p.colors && p.colors.length) || 1);
+    if (mode === 'solid') {
+      const L = lengths(p).on;
+      return L === 1 ? j : Math.floor((j + 0.5) * k * L / n);
+    }
+    if (mode === 'smooth') { const L = lengths(p); return Math.floor((j + 0.5) * (L.on + L.off) * k / n); }
     const band = BAND[mode];
     if (mode === 'fireworks') return Math.floor((j + 0.5) * k / n) * band + band / 2;
     return Math.floor((j + 0.5) * band * k / n);
   }
-
   // A card title without the animation it already shows as a label or an old copy suffix:
   // "Hungary - Motionless (copy)" -> "Hungary", "Motionless - Canucks" -> "Canucks".
   // "Untitled (n)" keeps its number: it's the only thing telling those designs apart.
@@ -164,11 +198,29 @@
   // Name and brightness are ignored: the cloud may rename it and brightness is a live slider.
   function sameDesign(pattern, spec) {
     if (!pattern || !spec) return false;
-    const cols = (a) => (a || []).map((c) => String(c).toLowerCase()).join();
+    const pc = pattern.colors || [], sc = spec.colors || [];
+    const prm = (x) => JSON.stringify(Object.keys((x && x.params) || {}).sort().map((k) => [k, x.params[k]]));
     return (pattern.animation || 'motionless') === (spec.animation || 'motionless')
-      && cols(pattern.colors) === cols(spec.colors);
+      && pc.length === sc.length && pc.every((c, i) => sameColor(c, sc[i]))
+      && (!spec.background || sameColor(pattern.background, spec.background))
+      && (!spec.params || prm(pattern) === prm(spec));
   }
 
+  // The device colour (gamma-corrected RGB, as service.hex_to_int) a screen colour is sent as.
+  const LED_GAMMA = 2.8;
+  function toDevice(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+    if (!m) return null;
+    const v = parseInt(m[1], 16), rgb = [(v >> 16) & 255, (v >> 8) & 255, v & 255], top = Math.max(...rgb);
+    return top ? rgb.map((c) => Math.round(top * Math.pow(c / top, LED_GAMMA))) : rgb;
+  }
+  // Whether two screen colours drive the lights the same (the cloud hands back the
+  // device colour, so an edited colour comes back as a nearby shade).
+  function sameColor(a, b) {
+    if (String(a || '').toLowerCase() === String(b || '').toLowerCase()) return true;
+    const x = toDevice(a), y = toDevice(b);
+    return !!(x && y) && x.every((c, i) => Math.abs(c - y[i]) <= 2);
+  }
   // How a pattern's brightness dims a drawn light: [glow, core] alpha factors.
   // Full brightness is [1, 1]; the core dims too so small previews show the change.
   function dimOf(p) {
@@ -177,7 +229,7 @@
   }
 
   const api = { fitBox, offTimeOptions, nightMin, guestAfter, guestOk, heroHidden, GUEST_LAST, NIGHT_ENDS,
-    mod, rnd, MODES, STILL, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, canRevert, sameDesign,
+    mod, rnd, MODES, STILL, lengths, colAt, stripIndex, titleTidy, orderGroup, GROUP_PAGE, nextUntitled, nextCopyName, canRevert, sameDesign, sameColor, toDevice,
     dimOf };
   root.GemstoneCore = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

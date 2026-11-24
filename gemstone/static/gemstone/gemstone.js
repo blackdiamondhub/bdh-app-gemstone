@@ -957,7 +957,7 @@
   // Only rebuild the cards when what they show has changed.
   function cardsKey(pats) {
     const first = selCtrls()[0], fs = (first && first.state) || {};
-    return JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors, isFav(p), !!p.stock, !!p.guest]),
+    return JSON.stringify([pats.map((p) => [p.id, p.name, p.animation, p.colors, p.params || null, p.background || null, isFav(p), !!p.stock, !!p.guest]),
       PV && !lightsOn() ? PV.pat.id : null, fs.on && fs.pattern ? fs.pattern.id : null]);
   }
   function fillCards(el, pats, empty, opts) {
@@ -1278,21 +1278,26 @@
     snapshot();
     if (!SETUP) savedText('');
   }
-  const spec = () => ({ colors: C.design.colors.slice(), animation: C.design.animation, brightness: C.design.brightness,
-    speed: C.design.speed, direction: C.design.direction, name: C.design.name });
+  // Spacing and background come from the design it was opened from (Create has no controls for them yet).
+  const extras = () => Object.assign({}, C.design.params ? { params: Object.assign({}, C.design.params) } : {},
+    C.design.background ? { background: C.design.background } : {});
+  const spec = () => Object.assign({ colors: C.design.colors.slice(), animation: C.design.animation, brightness: C.design.brightness,
+    speed: C.design.speed, direction: C.design.direction, name: C.design.name }, extras());
   // The design + folder as a string, to tell whether anything changed since Create opened.
   const editKey = () => JSON.stringify([spec(), C.folder ? C.folder.id : '']);
   function snapshot() { C.orig = { key: editKey(), id: C.id, spec: spec(), folder: C.folder }; }
   const revertable = () => canRevert(C.orig, { key: editKey(), id: C.id });
   newDesign();
-  const previewPattern = () => ({ colors: C.design.colors, animation: C.design.animation, speed: C.design.speed,
-    direction: C.design.direction, brightness: Math.round(C.design.brightness * 255 / 100) });
+  const previewPattern = () => Object.assign({ colors: C.design.colors, animation: C.design.animation, speed: C.design.speed,
+    direction: C.design.direction, brightness: Math.round(C.design.brightness * 255 / 100) }, extras());
 
   function openCreate(p) {
     newDesign();
     C.design = { colors: (p.colors || ['#fff1e0']).slice(0, 20), animation: p.animation || 'motionless',
       brightness: clamp(Math.round((p.brightness == null ? 255 : p.brightness) * 100 / 255), 1, 100),
       speed: p.speed == null ? 128 : p.speed, direction: p.direction || 0, name: p.name || untitled() };
+    if (p.params) C.design.params = Object.assign({}, p.params);
+    if (p.background) C.design.background = p.background;
     const folder = OURS && p.folder ? OURS.folders.find((f) => f.id === p.folder) : null;
     if (folder && !folder.managed && (S.admin || folder.guest)) {
       C.id = p.id; C.folder = { id: folder.id, name: folder.name };

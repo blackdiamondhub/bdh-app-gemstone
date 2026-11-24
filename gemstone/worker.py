@@ -88,6 +88,11 @@ def tick(now=None):
         run_cleanup(now)
     except Exception:  # noqa: BLE001
         log.exception("guest cleanup failed")
+    try:
+        if cloud.configured():
+            service.note_outside_plays(now)
+    except Exception:  # noqa: BLE001
+        log.exception("outside play check failed")
 
 
 def _loop():

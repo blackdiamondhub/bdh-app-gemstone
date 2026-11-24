@@ -109,7 +109,9 @@ test('heroHidden matches the pinned bar observer', () => {
 });
 
 test('stripIndex: every colour of every pattern shows on a card strip', () => {
-  const anims = Object.keys(core.MODES).concat(['rainbow', 'unknown_future_anim']);
+  // accent/isofade draw their off gaps on purpose (see the accent test below).
+  const anims = Object.keys(core.MODES).filter((a) => !['accent', 'isofade'].includes(a))
+    .concat(['rainbow', 'unknown_future_anim']);
   const pal = ['#100000', '#200000', '#300000', '#400000', '#500000', '#600000',
     '#700000', '#800000', '#900000', '#a00000', '#b00000', '#c00000'];
   for (const animation of anims) {
@@ -122,6 +124,41 @@ test('stripIndex: every colour of every pattern shows on a card strip', () => {
       }
     }
   }
+});
+
+test('accent: "1 on, 3 off" lights every 4th light and leaves the rest dark', () => {
+  const p = { animation: 'accent', colors: ['#ff7700'], params: { on: 1, off: 3 }, speed: 128, direction: 0 };
+  for (let i = 0; i < 40; i++) {
+    const [c, a] = core.colAt(i, p, 2.5);
+    if (i % 4 === 0) assert.deepEqual([c.toLowerCase(), a > 0], ['#ff7700', true], `light ${i}`);
+    else assert.equal(a, 0, `light ${i} should be off`);
+  }
+  // The card strip shows the gaps too, not a solid bar.
+  const strip = Array.from({ length: 13 }, (_, j) => core.colAt(core.stripIndex(j, p, 13), p, 1.3)[1] > 0);
+  assert.ok(strip.some(Boolean) && !strip.every(Boolean), 'strip shows lights and gaps');
+  // Groups take the colours in turn; a background colour fills the off lights.
+  const q = { animation: 'accent', colors: ['#ff0000', '#00ff00'], params: { on: 2, off: 1 }, background: '#0000ff' };
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map((i) => core.colAt(i, q, 0)[0].toLowerCase()),
+    ['#ff0000', '#ff0000', '#0000ff', '#00ff00', '#00ff00', '#0000ff']);
+  assert.ok(core.colAt(2, q, 0)[1] > 0, 'background is lit');
+});
+
+test('motionless: a length repeats each colour', () => {
+  const p = { animation: 'motionless', colors: ['#ff0000', '#00ff00'], params: { length: 3 } };
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 6].map((i) => core.colAt(i, p, 0)[0]),
+    ['#ff0000', '#ff0000', '#ff0000', '#00ff00', '#00ff00', '#00ff00', '#ff0000']);
+  const seen = new Set();
+  for (let j = 0; j < 13; j++) seen.add(core.colAt(core.stripIndex(j, p, 13), p, 1.3)[0]);
+  assert.equal(seen.size, 2, 'both colours on the card strip');
+});
+
+test('sameDesign: background, params and the device round trip of a colour', () => {
+  const live = { animation: 'accent', colors: ['#ff7600'], params: { on: 1, off: 3 } };
+  assert.ok(core.sameDesign(live, { animation: 'accent', colors: ['#ff7700'] }), 'nearby shade is the same light');
+  assert.ok(core.sameDesign(live, { animation: 'accent', colors: ['#ff7700'], params: { off: 3, on: 1 } }));
+  assert.ok(!core.sameDesign(live, { animation: 'accent', colors: ['#ff7700'], params: { on: 2, off: 3 } }));
+  assert.ok(!core.sameDesign(live, { animation: 'accent', colors: ['#ff7700'], background: '#0000ff' }));
+  assert.ok(!core.sameDesign(live, { animation: 'accent', colors: ['#ff0000'] }));
 });
 
 test('titleTidy: drops the animation the card already labels', () => {
