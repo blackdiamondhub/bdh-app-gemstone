@@ -112,11 +112,28 @@ def activity() -> list[dict]:
 
 # ---------------------------------------------------------------- colours
 
+# LED channel values are linear light, so a secondary channel looks far stronger on
+# the lights than the same number on a screen: Gemstone's "Orange" is (255, 30, 0),
+# which drawn as-is is red. The UI works in screen colours and these two convert,
+# keeping the brightest channel (so brightness and pure colours are unchanged) and
+# gamma-correcting the others against it.
+LED_GAMMA = 2.8
+
+
+def _rebalance(rgb: tuple[int, int, int], power: float) -> tuple[int, ...]:
+    m = max(rgb)
+    if not m:
+        return rgb
+    return tuple(round(m * (c / m) ** power) for c in rgb)
+
+
 def int_to_hex(value: int) -> str:
+    """A device colour as the screen colour that looks like it."""
     n = int(value)
     r, g, b, w = n & 0xFF, (n >> 8) & 0xFF, (n >> 16) & 0xFF, (n >> 24) & 0xFF
     if w and not (r or g or b):
         return WARM_HEX
+    r, g, b = _rebalance((r, g, b), 1 / LED_GAMMA)
     if w:  # RGB plus some warm white: lighten towards warm.
         k = w / 255
         r, g, b = (round(c + (t - c) * k * 0.6) for c, t in zip((r, g, b), (255, 241, 224)))
@@ -124,12 +141,50 @@ def int_to_hex(value: int) -> str:
 
 
 def hex_to_int(value: str) -> int:
+    """A screen colour as the device colour that looks like it."""
     if not isinstance(value, str) or not _HEX.match(value):
         raise Invalid(f"not a colour: {value!r}")
     if value.lower() == WARM_HEX:
         return WARM_INT
-    r, g, b = int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16)
+    r, g, b = _rebalance((int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16)), LED_GAMMA)
     return r | (g << 8) | (b << 16)
+
+
+# ---------------------------------------------------------------- pattern parameters
+
+# The ``extraParameters`` the preview draws, per animation, as (cloud key, cloud name,
+# UI name). Cloud bodies don't always carry the names, so they're matched by key.
+PARAMS = {
+    "accent": (("0", "On Length", "on"), ("1", "Off Length", "off")),
+    "isofade": (("0", "On Length", "on"), ("1", "Off Length", "off")),
+    "motionless": (("1", "Length", "length"),),
+    "smooth": (("0", "Length", "length"), ("1", "SECTION_SPACING", "spacing")),
+}
+PARAM_MAX = 200
+
+
+def params_json(animation: str, extra) -> dict:
+    """The preview's parameters from a cloud ``extraParameters`` body."""
+    out = {}
+    if not isinstance(extra, dict):
+        return out
+    for key, _, ui in PARAMS.get(animation, ()):
+        entry = extra.get(key)
+        value = entry.get("value") if isinstance(entry, dict) else None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            out[ui] = max(0, min(PARAM_MAX, int(value)))
+    return out
+
+
+def params_api(animation: str, params) -> dict | None:
+    """A cloud ``extraParameters`` body from the editor's parameters."""
+    if not isinstance(params, dict) or animation not in PARAMS:
+        return None
+    body: dict = {}
+    for key, name, ui in PARAMS[animation]:
+        if ui in params:
+            body[key] = {"name": name, "value": _clamp(params[ui], 0, PARAM_MAX, ui)}
+    return dict(body, version=0) if body else None
 
 
 # ---------------------------------------------------------------- patterns
@@ -147,9 +202,13 @@ def _remember(raw: dict) -> None:
 def pattern_json(p, **extra) -> dict:
     """A pattern as the UI sees it."""
     raw = dict(getattr(p, "raw", None) or {})
-    _remember(raw or {"id": p.id, "name": p.name, "colors": list(p.colors), "animation": p.animation,
-                      "brightness": p.brightness, "speed": p.speed, "direction": p.direction,
-                      "backgroundColor": p.background_color})
+    if not raw:
+        raw = {"id": p.id, "name": p.name, "colors": list(p.colors), "animation": p.animation,
+               "brightness": p.brightness, "speed": p.speed, "direction": p.direction,
+               "backgroundColor": p.background_color}
+        if getattr(p, "extra_parameters", None):
+            raw["extraParameters"] = p.extra_parameters
+    _remember(raw)
     out = {
         "id": p.id,
         "name": p.name or "Untitled",
@@ -159,6 +218,11 @@ def pattern_json(p, **extra) -> dict:
         "speed": int(p.speed),
         "direction": int(p.direction),
     }
+    if p.background_color:
+        out["background"] = int_to_hex(p.background_color)
+    params = params_json(out["animation"], getattr(p, "extra_parameters", None))
+    if params:
+        out["params"] = params
     out.update(extra)
     return out
 
@@ -188,6 +252,7 @@ def pattern_from_spec(spec: dict, *, name: str = "", pattern_id: str = ""):
     if animation not in ANIMATION_NAMES:
         raise Invalid(f"unknown animation {animation!r}")
     brightness = round(_clamp(spec.get("brightness", 100), 1, 100, "brightness") * 255 / 100)
+    background = spec.get("background")
     return _pattern_cls()(
         id=pattern_id,
         name=(name or str(spec.get("name") or "Untitled"))[:60],
@@ -196,7 +261,8 @@ def pattern_from_spec(spec: dict, *, name: str = "", pattern_id: str = ""):
         brightness=brightness,
         speed=_clamp(spec.get("speed", 128), 0, 255, "speed"),
         direction=_clamp(spec.get("direction", 0), 0, 4, "direction"),
-        background_color=0,
+        background_color=hex_to_int(background) if background else 0,
+        extra_parameters=params_api(animation, spec.get("params")),
     )
 
 
@@ -206,7 +272,9 @@ SOLID_ID_PREFIX = "bd450000-0000-4000-8000-000000"
 
 
 def solid_id(color: str) -> str:
-    return SOLID_ID_PREFIX + int_to_hex(hex_to_int(color))[1:]
+    hex_to_int(color)  # validates
+    # The swatch's own hex, not the device round trip (gamma makes that lossy).
+    return SOLID_ID_PREFIX + color[1:].lower()
 
 
 def solid_pattern(color: str, name: str = ""):
@@ -422,6 +490,7 @@ def _restore(snapshot) -> None:
         if item.get("raw"):
             cloud.write(lambda c, cid=cid, raw=item["raw"]: c.play_pattern(cid, Pattern.from_api(copy.deepcopy(raw))),
                         invalidate=(f"state:{cid}",))
+            _mark_playing({cid: item["raw"].get("id")})
         if not item["on"]:
             cloud.write(lambda c, cid=cid: c.set_on_state(cid, False), invalidate=(f"state:{cid}",))
 
@@ -439,6 +508,43 @@ def _keep_undo(snapshot) -> str:
 def _play(ids, pattern) -> None:
     for cid in ids:
         cloud.write(lambda c, cid=cid: c.play_pattern(cid, pattern), invalidate=(f"state:{cid}",))
+    _mark_playing({cid: getattr(pattern, "id", None) for cid in ids})
+
+
+_playing_lock = threading.Lock()
+
+
+def _mark_playing(by_cid: dict) -> None:
+    """Remember what each controller was last seen or told to play (``note_outside_plays``)."""
+    with _playing_lock:
+        store = app_state(APP)
+        playing = dict(store.get("playing") or {})
+        playing.update({cid: str(pid) for cid, pid in by_cid.items() if pid})
+        store.set("playing", playing)
+
+
+def note_outside_plays(now=None) -> list[str]:
+    """Count designs started somewhere else (the Gemstone app, a timer) as plays, so
+    they show in Recently played. A design on several controllers counts once.
+    Returns the pattern ids counted."""
+    seen = dict(app_state(APP).get("playing") or {})
+    now_playing, counted = {}, []
+    for c in controllers():
+        try:
+            s = state(c["id"])
+        except cloud.CloudError:
+            continue
+        pid = (s.get("pattern") or {}).get("id")
+        if not s.get("on") or not pid:
+            continue
+        now_playing[c["id"]] = pid
+        if seen.get(c["id"]) != pid and pid not in counted:
+            counted.append(pid)
+    for pid in counted:
+        record_play(pid, now)
+    if now_playing:
+        _mark_playing(now_playing)
+    return counted
 
 
 def play(ids, ref) -> dict:
