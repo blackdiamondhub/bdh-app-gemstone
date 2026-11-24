@@ -635,7 +635,7 @@
   }
 
   // ------------------------------------------------------------ views
-  const VIEWS = ['tonight', 'create'];
+  const VIEWS = ['tonight', 'create', 'plan'];
   let view = SETUP ? 'setup' : 'tonight';
   const scenes = {};
   const insets = new Map();
@@ -647,7 +647,7 @@
     let v = (location.hash || '').replace('#', '');
     // The old Patterns page is now the "All patterns" part of Tonight.
     const toAll = v === 'patterns';
-    if (!VIEWS.includes(v)) v = 'tonight';
+    if (!VIEWS.includes(v) || (v === 'plan' && !$('v-plan'))) v = 'tonight';
     if (T && view === 'create' && v !== 'create') endTry(true, true);
     view = v;
     closePop();
@@ -658,7 +658,7 @@
 
   function renderShell() {
     root.querySelectorAll('.ri').forEach((a) => a.classList.toggle('on', a.dataset.view === view));
-    VIEWS.forEach((v) => { $('v-' + v).hidden = v !== view; });
+    VIEWS.forEach((v) => { const sec = $('v-' + v); if (sec) sec.hidden = v !== view; });
     renderMsg();
   }
   function renderMsg() {
@@ -689,6 +689,7 @@
     renderLights();
     if (view === 'tonight') { renderTonight(); syncPinned(); }
     else if (view === 'create') renderCreate();
+    else if (view === 'plan' && window.GemstonePlan) window.GemstonePlan.show(S);
     if (view !== 'tonight') setPinned(false);
   }
 
@@ -898,7 +899,23 @@
   const EV_KEY = 'gemstone.eventBar.expanded';
   let evOpen = false;
   try { evOpen = localStorage.getItem(EV_KEY) === '1'; } catch (e) { /* private mode */ }
+  // A schedule (a Gemstone timer) that has the lights now, or will take them back.
+  function renderSchNow() {
+    const sn = S.schedule_now, box = $('t-sch');
+    box.hidden = !sn;
+    if (!sn) return;
+    const when = (iso) => {
+      const d = new Date(iso), today = new Date();
+      const day = d.toDateString() === today.toDateString() ? ''
+        : d.toLocaleDateString(undefined, { weekday: 'short' }) + ' ';
+      return day + fmtTime(d);
+    };
+    $('t-sch-text').textContent = sn.until
+      ? '\u{1F4C5} ' + sn.name + ' \u00b7 until ' + when(sn.until)
+      : '\u{1F4C5} ' + sn.name + ' resumes ' + when(sn.resumes);
+  }
   function renderEvent() {
+    renderSchNow();
     const ev = S.tonight_event, box = $('t-ev');
     box.hidden = !ev;
     if (!ev) return;
@@ -1562,6 +1579,7 @@
   }
   $('c-discard').onclick = discardEdits;
   $('c-back').onclick = () => { location.hash = '#tonight'; };
+  if ($('p-back')) $('p-back').onclick = () => { location.hash = '#tonight'; };
   const title = $('c-title');
   title.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); title.blur(); } });
   $('c-show').onclick = () => startTry();

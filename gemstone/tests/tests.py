@@ -12,11 +12,11 @@ import uuid
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase, override_settings
-from django.urls import reverse
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 from PIL import Image
 from pygemstone.models import (Device, DeviceState, DownloadablePattern, EventCategory, EventsSettings, Folder,
-                               FolderPattern, HomeGroup, Pattern, SubscribedEvent)
+                               FolderPattern, HomeGroup, Pattern, SubscribedEvent, Timer, TimerData)
 
 from bdh_sdk import INFO, ON, WARN, secrets
 from bdh_sdk.testing import FakeBroker, assert_plugin_importable
@@ -86,6 +86,8 @@ class FakeGemstone:
         self.inflight = 0
         self.max_inflight = 0
         self.delay = 0.0
+        self.timers = {}
+        self.pending = {}  # cid -> change the controller hasn't applied yet
 
     @staticmethod
     def _fp(folder, data, created, fav=False):
@@ -170,6 +172,67 @@ class FakeGemstone:
 
     async def impulse(self, cid, lights):
         await self._write("impulse", cid, list(lights))
+
+    # timers: like the real controller, a write lands later and a second
+    # write to a controller with one still pending is silently dropped.
+    async def timers_by_homegroup(self, homegroup_id):
+        return list(self.timers.values())
+
+    async def _timer_write(self, op, cid, tid, change):
+        if cid in self.pending:
+            await self._write("dropped", op, cid, tid)
+            return
+        await self._write(op, cid, tid)
+        self.pending[cid] = change
+
+    async def create_timer(self, cid, hg, *, name, on_time, off_time, pattern, enabled=True, timer_type="daily",
+                           days_of_week=None, start_date=None, end_date=None, on_offset_minutes=None,
+                           timer_id=None):
+        td = TimerData(timer_type, on_time, off_time, days_of_week, start_date, end_date, on_offset_minutes)
+        td.validate()
+        t = Timer(id=timer_id, name=name, homegroup_id=hg, assignee_id=cid, enabled=enabled, timer_data=td,
+                  pattern=pattern)
+        await self._timer_write("create_timer", cid, timer_id, lambda: self.timers.__setitem__(t.id, t))
+        return t
+
+    async def update_timer(self, timer):
+        t = Timer(id=timer.id, name=timer.name, homegroup_id=timer.homegroup_id, assignee_id=timer.assignee_id,
+                  enabled=True, timer_data=timer.timer_data, pattern=timer.pattern)
+        await self._timer_write("update_timer", timer.assignee_id, timer.id,
+                                lambda: self.timers.__setitem__(t.id, t))
+        return t
+
+    async def set_timer_enabled(self, cid, tid, enabled):
+        def apply():
+            self.timers[tid].enabled = enabled
+        await self._timer_write("set_timer_enabled", cid, tid, apply)
+
+    async def delete_timer(self, cid, tid):
+        await self._timer_write("delete_timer", cid, tid, lambda: self.timers.pop(tid, None))
+
+    async def wait_for_timer(self, hg, tid, predicate=None, *, present=True, timeout=None):
+        await self._write("wait", tid)
+        for change in self.pending.values():
+            change()
+        self.pending.clear()
+        t = self.timers.get(tid)
+        if present:
+            assert t is not None and (predicate is None or predicate(t)), f"timer {tid} never landed"
+        else:
+            assert t is None, f"timer {tid} never went away"
+        return t
+
+    def add_timer(self, tid, cid, name="1 on, 3 off Orange", enabled=True, **td):
+        data = dict(timer_type="daily", on_time="sunset", off_time="22:00", on_offset_minutes=-30)
+        data.update(td)
+        self.timers[tid] = Timer(id=tid, name=name, homegroup_id="hg-1", assignee_id=cid, enabled=enabled,
+                                 timer_data=TimerData(**data), pattern=Pattern.from_api(
+                                     pat("p-orange", "1 on, 3 off Orange", (0xFFFF8800, 0))))
+
+    def seed_wife(self):
+        """The two per-controller timers made in the Gemstone app: one schedule."""
+        self.add_timer("t-house", "house")
+        self.add_timer("t-tub", "tub")
 
 
 class Fresh:
@@ -990,15 +1053,13 @@ class ViewTests(Fresh, TestCase):
         self.assertTrue(r.json()["schedule"]["dark"])
 
     def test_autopilot_is_admin_only(self):
-        self.assertEqual(self.client.get(reverse("gemstone_autopilot")).status_code, 404)
         self.assertEqual(self.client.get(reverse("gemstone_autopilot_api")).status_code, 403)
         self.assertEqual(self.post("gemstone_autopilot_api", {"brightness": 40}).status_code, 403)
         with patch("gemstone.views.is_admin", return_value=True):
-            page = self.client.get(reverse("gemstone_autopilot"))
-            self.assertContains(page, 'data-mode="autopilot"')
-            self.assertContains(page, 'id="ap-data"')
-            self.assertContains(page, "Vancouver Canucks")
-            self.assertContains(page, 'data-bdh-nav="hub_settings_app"')
+            page = self.client.get(reverse("gemstone_index"))
+            self.assertContains(page, 'id="ap"')
+            self.assertContains(page, 'data-autopilot-url="/gemstone/api/autopilot/"')
+            self.assertEqual(self.client.get(reverse("gemstone_autopilot_api")).status_code, 200)
             r = self.post("gemstone_autopilot_api", {"schedule": {"off_time": "23:45"}})
             self.assertEqual(r.json()["settings"]["schedule"]["off_time"], "23:45")
 
@@ -1198,8 +1259,11 @@ class PluginTests(SimpleTestCase):
         self.assertEqual(spec.network, "outbound")
         self.assertEqual({s.key for s in spec.settings}, {"gemstone_email", "gemstone_password"})
         # Photos & light paths live under the hub's Settings → Gemstone.
-        self.assertEqual([p.url_name for p in spec.settings_pages], ["gemstone_settings", "gemstone_autopilot"])
-        self.assertEqual(reverse("gemstone_autopilot"), "/gemstone/autopilot/")
+        # Autopilot moved into the app's Plan tab.
+        self.assertEqual([p.url_name for p in spec.settings_pages], ["gemstone_settings"])
+        with self.assertRaises(NoReverseMatch):
+            reverse("gemstone_autopilot")
+        self.assertFalse((ROOT / "templates/gemstone/autopilot.html").exists())
         self.assertEqual(reverse("gemstone_settings"), "/gemstone/settings/")
 
     def test_tile_is_named_after_the_product(self):
@@ -1306,13 +1370,14 @@ class LightsSwitchTests(SimpleTestCase):
         for shared in ("gs", "gs-msg", "gs-toast", "gs-toast-text", "gs-pop"):
             self.assertIn(shared, setup)
 
-    def test_autopilot_page_has_every_element_its_script_uses(self):
-        html = (ROOT / "templates/gemstone/autopilot.html").read_text(encoding="utf-8")
-        js = (ROOT / "static/gemstone/autopilot.js").read_text(encoding="utf-8")
-        have = set(re.findall(r'id="([^"{]+)"', html)) | set(re.findall(r'json_script:"([\w-]+)"', html))
-        used = set(re.findall(r"(?:\$|getElementById)\('([\w-]+)'\)", js))
-        self.assertGreater(len(used), 10)
-        self.assertEqual(sorted(used - have), [])
+    def test_plan_tab_has_every_element_its_scripts_use(self):
+        html = (ROOT / "templates/gemstone/index.html").read_text(encoding="utf-8")
+        have = set(re.findall(r'id="([^"{]+)"', html))
+        for name in ("autopilot.js", "plan.js"):
+            js = (ROOT / "static/gemstone" / name).read_text(encoding="utf-8")
+            used = set(re.findall(r"(?:\$|getElementById)\('([\w-]+)'\)", js))
+            self.assertGreater(len(used), 10, name)
+            self.assertEqual(sorted(used - have), [], name)
 
 class LayoutRunNameTests(Fresh, TestCase):
     """Runs aren't named any more; the UI sends whatever and the server numbers them."""
@@ -1490,3 +1555,194 @@ class OptimisticUiTests(SimpleTestCase):
 
     def test_poll_does_not_overwrite_a_pending_write(self):
         self.assertRegex(self.js, r"if \(pending\) return;")
+
+
+def entry(key, kind, start, end, lights=("house",)):
+    return {"key": key, "kind": kind, "name": key, "lights": set(lights), "start": start, "end": end,
+            "schedule": key, "colors": None, "design": None}
+
+
+class PrecedenceTests(SimpleTestCase):
+    """What the controller plays when schedules overlap (measured on a real one)."""
+
+    def at(self, hour, minute=0):
+        return dt.datetime(2026, 11, 21, hour, minute, tzinfo=UTC)
+
+    def test_latest_start_wins_then_falls_back_like_a_stack(self):
+        orange = entry("orange", "daily", self.at(16, 30), self.at(22))
+        a = entry("a", "daily", self.at(21, 3), self.at(21, 13))
+        b = entry("b", "daily", self.at(21, 6), self.at(21, 10))
+        es = [orange, a, b]
+        self.assertEqual([service.winner(es, self.at(21, m))["key"] for m in (2, 4, 7, 11, 14)],
+                         ["orange", "a", "b", "a", "orange"])
+        self.assertIsNone(service.winner(es, self.at(22)))
+        segs = service.segments(es, self.at(16), self.at(23))
+        self.assertEqual([(x["entry"]["key"], x["start"].strftime("%H:%M")) for x in segs],
+                         [("orange", "16:30"), ("a", "21:03"), ("b", "21:06"), ("a", "21:10"), ("orange", "21:13")])
+
+    def test_tiers_beat_a_later_start(self):
+        daily = entry("daily", "daily", self.at(20), self.at(23))
+        auto = entry("auto", "autopilot", self.at(18), self.at(23))
+        dates = entry("dates", "yearly", self.at(17), self.at(23))
+        self.assertEqual(service.winner([daily, auto], self.at(21))["key"], "auto")
+        self.assertEqual(service.winner([daily, auto, dates], self.at(21))["key"], "dates")
+
+    def test_same_start_tie_goes_to_weekly(self):
+        daily = entry("daily", "daily", self.at(20), self.at(23))
+        weekly = entry("weekly", "weekly", self.at(20), self.at(22))
+        self.assertEqual(service.winner([daily, weekly], self.at(21))["key"], "weekly")
+        self.assertEqual(service.winner([daily, weekly], self.at(22, 30))["key"], "daily")
+
+
+class ScheduleTests(Fresh, TestCase):
+    def setUp(self):
+        super().setUp()
+        patch.object(service, "_site", return_value=None).start()  # sunset falls back to 17:00
+        patch.object(service, "_spawn", lambda fn: fn()).start()
+        service._job.clear()
+        self.addCleanup(service._job.clear)
+        self.fake.seed_wife()
+        self.admin = patch("gemstone.views.is_admin", return_value=True)
+
+    def post(self, name, body):
+        return self.client.post(reverse(name), body, content_type="application/json")
+
+    def as_admin(self):
+        self.admin.start()
+        self.addCleanup(self.admin.stop)
+
+    def body(self, **kw):
+        b = {"lights": ["house", "tub"], "design": "p-ours", "repeat": "weekly", "days": [5, 6],
+             "on": "20:00", "off": "23:00", "name": "Weekend"}
+        b.update(kw)
+        return b
+
+    def timer_ops(self):
+        return [(w[0], w[1][-1] if w[0] != "wait" else w[1][0]) for w in self.fake.writes]
+
+    def test_matching_timers_on_two_lights_are_one_schedule(self):
+        self.fake.add_timer("t-other", "house", name="Late", on_time="23:00", off_time="23:30",
+                            on_offset_minutes=None)
+        scheds = service.schedules()
+        self.assertEqual(len(scheds), 2)
+        wife = next(x for x in scheds if x["name"] == "1 on, 3 off Orange")
+        self.assertEqual((wife["lights"], wife["light_names"]), (["house", "tub"], ["House", "Hot Tub"]))
+        self.assertEqual((wife["on"], wife["on_offset"], wife["off"], wife["repeat"]), ("sunset", -30, "22:00", "daily"))
+        self.assertEqual(wife["timers"], {"house": "t-house", "tub": "t-tub"})
+        self.assertEqual(wife["design"]["name"], "1 on, 3 off Orange")
+
+    def test_create_on_two_lights_writes_one_at_a_time(self):
+        self.as_admin()
+        r = self.post("gemstone_schedule_save", self.body())
+        self.assertEqual(r.json()["job"]["state"], "done", r.json())
+        ops = self.timer_ops()
+        self.assertEqual([o for o, _ in ops], ["create_timer", "wait", "create_timer", "wait"])
+        self.assertEqual(ops[0][1], ops[1][1])
+        self.assertNotIn("dropped", [o for o, _ in ops])
+        weekend = next(x for x in self.client.get(reverse("gemstone_plan")).json()["schedules"]
+                       if x["name"] == "Weekend")
+        self.assertEqual((weekend["lights"], weekend["days"], weekend["design"]["id"]),
+                         (["house", "tub"], [5, 6], "p-ours"))
+
+    def test_edit_toggle_and_delete_reach_every_light(self):
+        self.as_admin()
+        sid = "t-house"
+        r = self.post("gemstone_schedule_save", self.body(id=sid, repeat="daily", days=[], on="sunset",
+                                                          on_offset=-30, off="23:00", name="Orange"))
+        self.assertEqual(r.json()["job"]["state"], "done", r.json())
+        self.assertEqual([o for o, _ in self.timer_ops()], ["update_timer", "wait"] * 2)
+        self.assertEqual({t.timer_data.off_time for t in self.fake.timers.values()}, {"23:00"})
+        self.fake.writes.clear()
+        self.post("gemstone_schedule_toggle", {"id": sid, "enabled": False})
+        self.assertEqual([o for o, _ in self.timer_ops()], ["set_timer_enabled", "wait"] * 2)
+        self.assertFalse(any(t.enabled for t in self.fake.timers.values()))
+        self.post("gemstone_schedule_delete", {"id": sid})
+        self.assertEqual(self.fake.timers, {})
+
+    def test_dropping_a_light_deletes_only_its_timer(self):
+        self.as_admin()
+        self.post("gemstone_schedule_save", self.body(id="t-house", lights=["house"], repeat="daily", days=[],
+                                                      on="sunset", on_offset=-30, off="22:00",
+                                                      name="1 on, 3 off Orange", design="p-ours"))
+        self.assertEqual(sorted(self.fake.timers), ["t-house"])
+
+    def test_same_start_on_shared_lights_is_refused(self):
+        self.as_admin()
+        r = self.post("gemstone_schedule_save", self.body(lights=["tub"], repeat="weekly", days=[6],
+                                                          on="sunset", on_offset=-30))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("already starts at that time", r.json()["error"])
+        self.assertEqual(self.fake.writes, [])
+        # A different tier, time or light is fine: the timeline shows who wins.
+        for ok in ({"repeat": "yearly", "start": "12-24", "end": "12-26", "on": "sunset", "on_offset": -30},
+                   {"on": "sunset", "on_offset": -15}):
+            service._job.clear()
+            self.assertEqual(self.post("gemstone_schedule_save", self.body(**ok)).status_code, 200, ok)
+
+    def test_reenabling_into_a_clash_is_refused(self):
+        self.as_admin()
+        self.fake.add_timer("t-x", "house", name="Copy", enabled=False)
+        r = self.post("gemstone_schedule_toggle", {"id": "t-x", "enabled": True})
+        self.assertEqual(r.status_code, 400)
+
+    def test_coming_up_shows_the_winner_and_whats_beaten(self):
+        self.fake.add_timer("t-xmas", "house", name="Lodge night", timer_type="yearly", days_of_week=list(range(7)),
+                            start_date="11-21", end_date="11-21", on_time="16:00", off_time="23:00",
+                            on_offset_minutes=None)
+        rows = service.plan(14, now=self.local(12))
+        tonight = rows[0]
+        self.assertEqual((tonight["first"], tonight["last"]), ("2026-11-21", "2026-11-21"))
+        house = next(g for g in tonight["groups"] if "house" in g["lights"])
+        tub = next(g for g in tonight["groups"] if "tub" in g["lights"])
+        self.assertEqual([x["name"] for x in house["segments"]], ["Lodge night"])
+        self.assertEqual([x["name"] for x in house["losers"]], ["1 on, 3 off Orange"])
+        self.assertEqual(([x["name"] for x in tub["segments"]], tub["losers"]), (["1 on, 3 off Orange"], []))
+        # Later nights have only the orange schedule on both lights, merged into one row.
+        self.assertEqual(rows[1]["first"], "2026-11-22")
+        self.assertEqual([g["lights"] for g in rows[1]["groups"]], [["house", "tub"]])
+
+    def test_tonight_line_while_playing_and_after_an_override(self):
+        self.fake.states["house"].update(onState=True, pattern=pat("p-orange", "1 on, 3 off Orange"))
+        now = self.local(19)
+        playing = service.schedule_now(now)
+        self.assertEqual(playing["name"], "1 on, 3 off Orange")
+        self.assertEqual(dt.datetime.fromisoformat(playing["until"]), self.local(22))
+        self.fake.states["house"]["pattern"] = pat("p-warm", "Warm white")
+        cloud.reset()
+        later = service.schedule_now(now)
+        self.assertEqual(set(later), {"name", "resumes"})
+        self.assertEqual(dt.datetime.fromisoformat(later["resumes"]), self.local(16, 30) + dt.timedelta(days=1))
+
+    def test_guests_get_nothing_from_the_plan(self):
+        for name, method in (("gemstone_plan", "get"), ("gemstone_schedule_save", "post"),
+                             ("gemstone_schedule_toggle", "post"), ("gemstone_schedule_delete", "post")):
+            r = (self.client.get(reverse(name)) if method == "get"
+                 else self.post(name, {"id": "t-house", "enabled": False, **self.body()}))
+            self.assertEqual(r.status_code, 403, name)
+        self.assertEqual(len(self.fake.timers), 2)
+        self.assertEqual(self.fake.writes, [])
+        page = self.client.get(reverse("gemstone_index")).content.decode()
+        for admin_only in ('data-view="plan"', 'id="v-plan"', "plan.js", "autopilot.js", "data-plan-url"):
+            self.assertNotIn(admin_only, page)
+        self.as_admin()
+        page = self.client.get(reverse("gemstone_index")).content.decode()
+        for admin_only in ('data-view="plan"', 'id="v-plan"', "plan.js", "data-plan-url"):
+            self.assertIn(admin_only, page)
+
+    def test_guest_state_has_only_the_tonight_line(self):
+        self.fake.states["house"].update(onState=True, pattern=pat("p-orange", "1 on, 3 off Orange"))
+        with patch.object(service, "_local_now", lambda now=None: timezone.localtime(now or self.local(19))):
+            data = self.client.get(reverse("gemstone_state")).json()
+        self.assertEqual(set(data["schedule_now"]), {"name", "until"})
+        text = json.dumps(data)
+        for leak in ("t-house", "t-tub", "timeline", "light_names", "\"repeat\"", "\"days\""):
+            self.assertNotIn(leak, text)
+        self.assertNotIn("timers", data)
+
+    def test_state_survives_a_broken_timer_list(self):
+        async def boom(hg):
+            raise cloud.CloudError("down")
+        self.fake.timers_by_homegroup = boom
+        data = self.client.get(reverse("gemstone_state")).json()
+        self.assertIsNone(data.get("schedule_now"))
+        self.assertTrue(data["controllers"])

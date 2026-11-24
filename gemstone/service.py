@@ -9,6 +9,8 @@ from __future__ import annotations
 import contextvars
 import copy
 import datetime as dt
+import itertools
+import json
 import logging
 import re
 import threading
@@ -918,8 +920,8 @@ def autopilot(now=None) -> dict:
 
 # --- sunset
 
-def sunset(day: dt.date, lat: float, lon: float, tz) -> dt.datetime | None:
-    """Sunset on ``day`` at ``lat``/``lon`` (NOAA's approximation, about a minute out), or None at the poles."""
+def _sun(day: dt.date, lat: float, lon: float, tz, *, rise: bool) -> dt.datetime | None:
+    """Sunrise or sunset on ``day`` at ``lat``/``lon`` (NOAA's approximation, about a minute out)."""
     import math
 
     g = 2 * math.pi / 365 * (day.timetuple().tm_yday - 1)
@@ -933,9 +935,20 @@ def sunset(day: dt.date, lat: float, lon: float, tz) -> dt.datetime | None:
               - math.tan(phi) * math.tan(decl))
     if not -1 <= cos_ha <= 1:
         return None
-    minutes = 720 - 4 * (lon - math.degrees(math.acos(cos_ha))) - eqtime
+    ha = math.degrees(math.acos(cos_ha))
+    minutes = 720 - 4 * (lon + (ha if rise else -ha)) - eqtime
     midnight = dt.datetime.combine(day, dt.time(0), tzinfo=dt.timezone.utc)
     return (midnight + dt.timedelta(minutes=minutes)).astimezone(tz)
+
+
+def sunset(day: dt.date, lat: float, lon: float, tz) -> dt.datetime | None:
+    """Sunset on ``day`` at ``lat``/``lon``, or None at the poles."""
+    return _sun(day, lat, lon, tz, rise=False)
+
+
+def sunrise(day: dt.date, lat: float, lon: float, tz) -> dt.datetime | None:
+    """Sunrise on ``day`` at ``lat``/``lon``, or None at the poles."""
+    return _sun(day, lat, lon, tz, rise=True)
 
 
 def _site():
@@ -1261,6 +1274,625 @@ def set_autopilot(changes, *, admin: bool) -> dict:
         _apply_schedule(s, on_offset=sch.get("on_offset"), off_time=sch.get("off_time"), admin=True)
     _save(s)
     return _settings_json(s)
+
+
+# ---------------------------------------------------------------- schedules
+#
+# A "schedule" is what the Gemstone app calls a timer: a saved design that
+# plays between an on and an off time on some days. Timers belong to one
+# controller each, so a schedule on two lights is two timers; timers with the
+# same name, days, times and design are shown (and edited) as one schedule.
+#
+# Timer writes land on the controller a few seconds later, and a second write
+# to the same controller while one is pending is dropped, so every write here
+# waits for the timer list to show it before the next one goes out. That can
+# take longer than a web request may, so the views run saves as a background
+# job and the page polls it.
+
+#: What wins when several things want the same lights (measured on a real
+#: controller, plus Gemstone's docs): the higher tier, then the latest start,
+#: then ``TIE``. When the winner ends the controller goes back to whatever
+#: else is still inside its window.
+TIER = {"yearly": 3, "autopilot": 2, "weekly": 1, "daily": 1}
+TIE = {"weekly": 1}
+REPEATS = ("daily", "weekly", "yearly")
+SUN_TIMES = ("sunset", "sunrise")
+#: Coming up: two weeks, or the season.
+PLAN_DAYS = (14, 90)
+SUNRISE_FALLBACK = dt.time(7, 0)
+TIMER_WAIT = 25.0
+_MM_DD = re.compile(r"^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+_HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _timers() -> list:
+    hg = homegroup_id()
+    return cloud.read("timers", 120, lambda c: c.timers_by_homegroup(hg))
+
+
+def _timer_key(t) -> tuple:
+    return (t.name, json.dumps(t.timer_data.to_api(), sort_keys=True), t.pattern.id if t.pattern else "")
+
+
+def _groups(timers, known) -> list[dict]:
+    """Timers bundled into schedules: ``[{cid: timer}]``, in a stable order."""
+    groups: list[dict] = []
+    open_: dict[tuple, dict] = {}
+    for t in sorted(timers, key=lambda t: t.id):
+        if t.timer_data is None or t.assignee_id not in known:
+            continue
+        key = _timer_key(t)
+        g = open_.get(key)
+        if g is None or t.assignee_id in g:
+            g = open_[key] = {}
+            groups.append(g)
+        g[t.assignee_id] = t
+    return groups
+
+
+def _sched_json(members: dict, ctrls: list[dict]) -> dict:
+    timers = sorted(members.values(), key=lambda t: t.id)
+    first = timers[0]
+    td = first.timer_data
+    lights = [c["id"] for c in ctrls if c["id"] in members]
+    by_id = {c["id"]: c["name"] for c in ctrls}
+    repeat = td.timer_type if td.timer_type in REPEATS else "daily"
+    return {
+        "id": first.id, "name": first.name or "Schedule",
+        "enabled": all(t.enabled for t in timers),
+        "timers": {cid: members[cid].id for cid in lights},
+        "lights": lights, "light_names": [by_id[c] for c in lights],
+        "repeat": repeat,
+        "days": sorted(int(d) for d in (td.days_of_week or [])) if repeat != "daily" else [],
+        "start": td.start_date if repeat == "yearly" else None,
+        "end": td.end_date if repeat == "yearly" else None,
+        "on": td.on_time, "on_offset": int(td.on_offset_minutes or 0) if td.on_time in SUN_TIMES else 0,
+        "off": td.off_time,
+        "design": pattern_json(first.pattern) if first.pattern else None,
+    }
+
+
+def schedules() -> list[dict]:
+    """The home group's schedules, as the Plan tab lists them."""
+    ctrls = controllers()
+    known = {c["id"] for c in ctrls}
+    return [_sched_json(g, ctrls) for g in _groups(_timers(), known)]
+
+
+def _members(sid: str) -> tuple[dict, dict]:
+    """(schedule json, {cid: timer}) for a schedule id."""
+    ctrls = controllers()
+    known = {c["id"] for c in ctrls}
+    for g in _groups(_timers(), known):
+        out = _sched_json(g, ctrls)
+        if out["id"] == sid:
+            return out, g
+    raise NotFound("That schedule is gone — it may have been changed in the Gemstone app")
+
+
+# --- when things play
+
+def _sun_fn(tz):
+    """``sun(day, "sunset"|"sunrise")`` for this site, cached, with a fallback when there's no location."""
+    where = _site()
+    cache: dict = {}
+
+    def sun(day: dt.date, kind: str) -> dt.datetime:
+        key = (day, kind)
+        if key not in cache:
+            at = None
+            if where is not None:
+                at = (sunrise if kind == "sunrise" else sunset)(day, where.latitude, where.longitude, tz)
+            if at is None:
+                at = dt.datetime.combine(day, SUNRISE_FALLBACK if kind == "sunrise" else GUEST_FALLBACK,
+                                         tzinfo=tz)
+            cache[key] = at.replace(second=0, microsecond=0)
+        return cache[key]
+    return sun
+
+
+def _sched_on(on: str, offset, day: dt.date, sun, tz) -> dt.datetime:
+    if on in SUN_TIMES:
+        return sun(day, on) + dt.timedelta(minutes=int(offset or 0))
+    return dt.datetime.combine(day, _hhmm(on), tzinfo=tz)
+
+
+def _sched_off(off: str, start: dt.datetime, sun, tz, offset=0) -> dt.datetime:
+    """The first ``off`` after ``start`` (an off before the on is the next morning)."""
+    day = start.date()
+    for d in (day, day + dt.timedelta(days=1)):
+        if off in SUN_TIMES:
+            at = sun(d, off)
+        else:
+            at = dt.datetime.combine(d, _hhmm(off), tzinfo=tz)
+        at += dt.timedelta(minutes=int(offset or 0))
+        if at > start:
+            return at
+    return start + dt.timedelta(days=1)
+
+
+def _weekday(day: dt.date) -> int:
+    """Gemstone's day numbers: 0 = Sunday."""
+    return (day.weekday() + 1) % 7
+
+
+def occurs(s: dict, day: dt.date) -> bool:
+    """Does schedule ``s`` start on ``day``?"""
+    repeat = s["repeat"]
+    if repeat == "weekly":
+        return _weekday(day) in s["days"]
+    if repeat == "yearly":
+        if s["days"] and _weekday(day) not in s["days"]:
+            return False
+        md, a, b = day.strftime("%m-%d"), s["start"] or "", s["end"] or ""
+        return a <= md <= b if a <= b else (md >= a or md <= b)
+    return True
+
+
+def _days(first: dt.date, last: dt.date):
+    d = first
+    while d <= last:
+        yield d
+        d += dt.timedelta(days=1)
+
+
+def _entries(scheds, first: dt.date, last: dt.date, tz, sun) -> list[dict]:
+    """Every time an enabled schedule plays between two dates."""
+    out = []
+    for s in scheds:
+        if not s["enabled"]:
+            continue
+        design = s.get("design") or {}
+        for day in _days(first, last):
+            if not occurs(s, day):
+                continue
+            try:
+                start = _sched_on(s["on"], s["on_offset"], day, sun, tz)
+                end = _sched_off(s["off"], start, sun, tz)
+            except Invalid:
+                break
+            out.append({"key": s["id"], "kind": s["repeat"], "name": s["name"], "lights": set(s["lights"]),
+                        "start": start, "end": end, "schedule": s["id"],
+                        "colors": design.get("colors"), "design": design.get("name")})
+    return out
+
+
+def _autopilot_entries(first: dt.date, last: dt.date, tz, sun) -> list[dict]:
+    """Autopilot's nights (its event days) between two dates."""
+    try:
+        s = _settings()
+        events = _events() if s.device_ids else []
+    except (cloud.CloudError, Invalid):
+        return []
+    w = s.schedule
+    if not events or w is None:
+        return []
+    out = []
+    for day in _days(first, last):
+        e = next((e for e in events if _event_day(e, day)), None)
+        if e is None:
+            continue
+        try:
+            start = _sched_on(w.on_time or "sunset", w.on_offset_minutes, day, sun, tz)
+            end = _sched_off(w.off_time or NIGHT_ENDS.strftime("%H:%M"), start, sun, tz, w.off_offset_minutes)
+        except Invalid:
+            return out
+        color = argb_hex(e.background_color)
+        out.append({"key": f"autopilot:{e.event_id}", "kind": "autopilot",
+                    "name": f"{emoji(e.icon, e.name)} {e.name}", "lights": set(s.device_ids),
+                    "start": start, "end": end, "schedule": None,
+                    "colors": [color] if color else None, "design": None})
+    return out
+
+
+def rank(entry: dict) -> tuple:
+    """How strongly an entry claims the lights. Bigger wins."""
+    return (TIER.get(entry["kind"], 0), entry["start"], TIE.get(entry["kind"], 0), entry["key"])
+
+
+def winner(entries, at: dt.datetime) -> dict | None:
+    """What plays at ``at``: the strongest entry whose window holds it."""
+    live = [e for e in entries if e["start"] <= at < e["end"]]
+    return max(live, key=rank) if live else None
+
+
+def segments(entries, start: dt.datetime, end: dt.datetime) -> list[dict]:
+    """Who wins when between ``start`` and ``end``: ``[{entry, start, end}]``."""
+    points = {start, end}
+    for e in entries:
+        for t in (e["start"], e["end"]):
+            if start < t < end:
+                points.add(t)
+    points = sorted(points)
+    out: list[dict] = []
+    for a, b in itertools.pairwise(points):
+        win = winner(entries, a)
+        if win is None:
+            continue
+        if out and out[-1]["entry"] is win and out[-1]["end"] == a:
+            out[-1]["end"] = b
+        else:
+            out.append({"entry": win, "start": a, "end": b})
+    return out
+
+
+def _seg_json(seg) -> dict:
+    e = seg["entry"]
+    return {"key": e["key"], "kind": e["kind"], "name": e["name"], "design": e["design"],
+            "colors": e["colors"], "schedule": e["schedule"],
+            "start": seg["start"].isoformat(), "end": seg["end"].isoformat()}
+
+
+def _loser_json(e) -> dict:
+    return {"key": e["key"], "kind": e["kind"], "name": e["name"],
+            "start": e["start"].isoformat(), "end": e["end"].isoformat()}
+
+
+def _night_start(now) -> dt.date:
+    return now.date() if now.time() >= NIGHT_ENDS else now.date() - dt.timedelta(days=1)
+
+
+def plan(days: int = PLAN_DAYS[0], now=None, scheds=None) -> list[dict]:
+    """Coming up: what plays each night, per group of lights, with what it beats.
+
+    Nights where the same things win merge into one row:
+    ``[{first, last, groups: [{lights, names, segments, losers}]}]``.
+    """
+    now = _local_now(now)
+    tz = now.tzinfo
+    sun = _sun_fn(tz)
+    ctrls = controllers()
+    scheds = schedules() if scheds is None else scheds
+    first = _night_start(now)
+    last = first + dt.timedelta(days=days - 1)
+    entries = (_entries(scheds, first - dt.timedelta(days=1), last + dt.timedelta(days=1), tz, sun)
+               + _autopilot_entries(first - dt.timedelta(days=1), last + dt.timedelta(days=1), tz, sun))
+    rows: list[dict] = []
+    for night in _days(first, last):
+        w0 = dt.datetime.combine(night, NIGHT_ENDS, tzinfo=tz)
+        w1 = dt.datetime.combine(night + dt.timedelta(days=1), NIGHT_ENDS, tzinfo=tz)
+        if night == first:
+            w0 = max(w0, now.replace(second=0, microsecond=0))
+        here = [e for e in entries if e["start"] < w1 and e["end"] > w0]
+        groups: dict[tuple, dict] = {}
+        for c in ctrls:
+            mine = [e for e in here if c["id"] in e["lights"]]
+            segs = segments(mine, w0, w1)
+            won = {s["entry"]["key"] for s in segs}
+            losers, seen = [], set()
+            for e in sorted(mine, key=lambda e: e["start"]):
+                if e["key"] not in won and e["key"] not in seen:
+                    seen.add(e["key"])
+                    losers.append(e)
+            if not segs and not losers:
+                continue
+            sig = (tuple(s["entry"]["key"] for s in segs), tuple(e["key"] for e in losers))
+            g = groups.get(sig)
+            if g is None:
+                g = groups[sig] = {"lights": [], "names": [], "segments": [_seg_json(s) for s in segs],
+                                   "losers": [_loser_json(e) for e in losers]}
+            g["lights"].append(c["id"])
+            g["names"].append(c["name"])
+        sig = tuple(sorted((tuple(g["lights"]), k) for k, g in groups.items()))
+        if rows and rows[-1]["_sig"] == sig:
+            rows[-1]["last"] = night.isoformat()
+            continue
+        rows.append({"_sig": sig, "first": night.isoformat(), "last": night.isoformat(),
+                     "groups": list(groups.values())})
+    for r in rows:
+        del r["_sig"]
+    return rows
+
+
+def _first_state(lights) -> dict | None:
+    for cid in lights:
+        try:
+            return state(cid)
+        except cloud.CloudError:
+            continue
+    return None
+
+
+def schedule_now(now=None) -> dict | None:
+    """The Tonight line for schedules (shown to everyone, so names and times only).
+
+    ``{"name", "until"}`` while a schedule is playing, ``{"name", "resumes"}``
+    once someone has played something else (or turned the lights off) during
+    one, or None when no schedule has the lights.
+    """
+    now = _local_now(now)
+    scheds = [s for s in schedules() if s["enabled"]]
+    if not scheds:
+        return None
+    tz = now.tzinfo
+    sun = _sun_fn(tz)
+    day = now.date()
+    entries = (_entries(scheds, day - dt.timedelta(days=1), day + dt.timedelta(days=8), tz, sun)
+               + _autopilot_entries(day - dt.timedelta(days=1), day + dt.timedelta(days=1), tz, sun))
+    for c in controllers():
+        mine = [e for e in entries if c["id"] in e["lights"]]
+        win = winner(mine, now)
+        if win is None or win["kind"] == "autopilot":
+            continue
+        s = _first_state([c["id"]])
+        sched = next(x for x in scheds if x["id"] == win["key"])
+        playing = (sched.get("design") or {}).get("id")
+        if s and s["on"] and (s["pattern"] or {}).get("id") == playing:
+            return {"name": win["name"], "until": win["end"].isoformat()}
+        nxt = min((e for e in mine if e["start"] > now and e["kind"] != "autopilot"),
+                  key=lambda e: e["start"], default=None)
+        if nxt is None:
+            return None
+        return {"name": nxt["name"], "resumes": nxt["start"].isoformat()}
+    return None
+
+
+# --- checking and saving
+
+def _check_mmdd(value, label) -> str:
+    value = str(value or "")
+    if not _MM_DD.match(value):
+        raise Invalid(f"pick a {label} date")
+    try:
+        dt.date(2024, int(value[:2]), int(value[3:]))
+    except ValueError:
+        raise Invalid(f"pick a real {label} date") from None
+    return value
+
+
+def _check_time(value, label, allowed) -> str:
+    value = str(value or "")
+    if value in allowed:
+        return value
+    if not _HHMM.match(value):
+        raise Invalid(f"pick a {label} time")
+    return value
+
+
+def _check_schedule(body: dict) -> dict:
+    """The editor's JSON as a schedule (same shape as :func:`schedules`), checked."""
+    if not isinstance(body, dict):
+        raise Invalid("schedule must be an object")
+    lights = check_ids(body.get("lights"))
+    pid = str(body.get("design") or "")
+    if not pid:
+        raise Invalid("pick a design")
+    pattern = _resolve({"id": pid})
+    repeat = body.get("repeat", "daily")
+    if repeat not in REPEATS:
+        raise Invalid("pick how it repeats")
+    days: list[int] = []
+    if repeat != "daily":
+        raw = body.get("days")
+        if repeat == "yearly" and not raw:
+            raw = list(range(7))
+        if not isinstance(raw, list) or not raw:
+            raise Invalid("pick at least one day")
+        try:
+            days = sorted({int(d) for d in raw})
+        except (TypeError, ValueError):
+            raise Invalid("days must be 0 (Sun) to 6 (Sat)") from None
+        if any(not 0 <= d <= 6 for d in days):
+            raise Invalid("days must be 0 (Sun) to 6 (Sat)")
+    start = end = None
+    if repeat == "yearly":
+        start = _check_mmdd(body.get("start"), "start")
+        end = _check_mmdd(body.get("end") or start, "end")
+    on = _check_time(body.get("on"), "on", SUN_TIMES)
+    off = _check_time(body.get("off"), "off", ("sunrise",))
+    offset = 0
+    if on in SUN_TIMES:
+        offset = _check_offset(body.get("on_offset", 0))
+    if on == off:
+        raise Invalid("the off time has to be different from the on time")
+    name = " ".join(str(body.get("name") or "").split())[:60] or pattern.name or "Schedule"
+    return {"id": str(body.get("id") or "") or None, "name": name, "lights": lights, "repeat": repeat,
+            "days": days, "start": start, "end": end, "on": on, "on_offset": offset, "off": off,
+            "enabled": bool(body.get("enabled", True)), "pattern": pattern,
+            "design": {"id": pattern.id, "name": pattern.name}}
+
+
+def _clash(s: dict, others: list[dict], today: dt.date) -> dict | None:
+    """Another enabled schedule that would start at exactly the same moment on the same lights.
+
+    That's the one case the controller doesn't settle predictably, so saving it is refused.
+    """
+    for o in others:
+        if (o["id"] == s["id"] or not o["enabled"] or TIER[o["repeat"]] != TIER[s["repeat"]]
+                or (o["on"], o["on_offset"]) != (s["on"], s["on_offset"])
+                or not set(o["lights"]) & set(s["lights"])):
+            continue
+        if any(occurs(s, d) and occurs(o, d) for d in _days(today, today + dt.timedelta(days=366))):
+            return o
+    return None
+
+
+def _check_clash(s: dict, others: list[dict], now=None) -> None:
+    other = _clash(s, others, _local_now(now).date())
+    if other is not None:
+        raise Invalid(f"“{other['name']}” already starts at that time on those lights — "
+                      "pick a different on time")
+
+
+def _timer_data(s: dict):
+    from pygemstone import TimerData
+
+    td = TimerData(timer_type=s["repeat"], on_time=s["on"], off_time=s["off"],
+                   days_of_week=s["days"] or None, start_date=s["start"], end_date=s["end"],
+                   on_offset_minutes=s["on_offset"] if s["on"] in SUN_TIMES else None)
+    try:
+        td.validate()
+    except ValueError as exc:
+        raise Invalid(str(exc)) from None
+    return td
+
+
+def _settled(hg: str, tid: str, predicate=None):
+    async def wait(client):
+        return await client.wait_for_timer(hg, tid, predicate, timeout=TIMER_WAIT)
+    return wait
+
+
+async def _listed(client, hg: str) -> dict:
+    return {t.id: t for t in await client.timers_by_homegroup(hg)}
+
+
+def _create(hg: str, cid: str, tid: str, s: dict, td) -> None:
+    async def go(client):
+        if tid not in await _listed(client, hg):  # a retry after the first try went through
+            await client.create_timer(cid, hg, name=s["name"], on_time=td.on_time, off_time=td.off_time,
+                                      pattern=s["pattern"], timer_type=td.timer_type,
+                                      days_of_week=td.days_of_week, start_date=td.start_date,
+                                      end_date=td.end_date, on_offset_minutes=td.on_offset_minutes,
+                                      timer_id=tid)
+        await _settled(hg, tid)(client)
+    cloud.write(go, invalidate=("timers",))
+
+
+def _update(hg: str, cid: str, timer, s: dict, td) -> None:
+    from pygemstone import Timer
+
+    sent = (s["name"], td.to_api(), s["pattern"].id)
+
+    def landed(t):
+        return t.timer_data is not None and (t.name, t.timer_data.to_api(),
+                                             t.pattern.id if t.pattern else "") == sent
+
+    async def go(client):
+        # Sent enabled: the cloud re-enables on every update anyway, and
+        # pygemstone's own disable-after-update would be a second, unwaited write.
+        await client.update_timer(Timer(id=timer.id, name=s["name"], homegroup_id=hg, assignee_id=cid,
+                                        enabled=True, timer_data=td, pattern=s["pattern"]))
+        await _settled(hg, timer.id, landed)(client)
+    cloud.write(go, invalidate=("timers",))
+
+
+def _enable(hg: str, cid: str, tid: str, enabled: bool) -> None:
+    async def go(client):
+        await client.set_timer_enabled(cid, tid, enabled)
+        await _settled(hg, tid, lambda t: t.enabled == enabled)(client)
+    cloud.write(go, invalidate=("timers",))
+
+
+def _delete(hg: str, cid: str, tid: str) -> None:
+    async def go(client):
+        if tid in await _listed(client, hg):
+            await client.delete_timer(cid, tid)
+        await client.wait_for_timer(hg, tid, present=False, timeout=TIMER_WAIT)
+    cloud.write(go, invalidate=("timers",))
+
+
+def check_save(body: dict, now=None) -> dict:
+    """Check an edit before it's saved (fast, so the editor gets errors straight away)."""
+    s = _check_schedule(body)
+    current = schedules()
+    if s["id"] and not any(o["id"] == s["id"] for o in current):
+        raise NotFound("That schedule is gone — it may have been changed in the Gemstone app")
+    if s["enabled"]:
+        _check_clash(s, current, now)
+    return s
+
+
+def save_schedule(s: dict) -> None:
+    """Write a checked schedule: one timer per light, one write at a time."""
+    hg = homegroup_id()
+    members = _members(s["id"])[1] if s["id"] else {}
+    td = _timer_data(s)
+    want = (s["name"], json.dumps(td.to_api(), sort_keys=True), s["pattern"].id)
+    for cid, timer in members.items():
+        if cid not in s["lights"]:
+            _delete(hg, cid, timer.id)
+    for cid in s["lights"]:
+        timer = members.get(cid)
+        if timer is None:
+            tid = str(uuid.uuid4())
+            _create(hg, cid, tid, s, td)
+            enabled = True
+        else:
+            tid = timer.id
+            enabled = timer.enabled
+            if _timer_key(timer) != want:
+                _update(hg, cid, timer, s, td)
+                enabled = True
+        if enabled != s["enabled"]:
+            _enable(hg, cid, tid, s["enabled"])
+    cloud.forget("timers")
+
+
+def check_toggle(sid: str, enabled: bool, now=None) -> dict:
+    s, _ = _members(str(sid or ""))
+    if enabled:
+        _check_clash(dict(s, enabled=True), schedules(), now)
+    return s
+
+
+def toggle_schedule(sid: str, enabled: bool) -> None:
+    hg = homegroup_id()
+    for cid, timer in _members(sid)[1].items():
+        if timer.enabled != enabled:
+            _enable(hg, cid, timer.id, enabled)
+    cloud.forget("timers")
+
+
+def delete_schedule(sid: str) -> None:
+    hg = homegroup_id()
+    for cid, timer in _members(sid)[1].items():
+        _delete(hg, cid, timer.id)
+    cloud.forget("timers")
+
+
+# --- the background job
+
+_job_lock = threading.Lock()
+_job: dict = {}
+
+
+def _spawn(fn) -> None:
+    threading.Thread(target=fn, name="gemstone-schedules", daemon=True).start()
+
+
+def job() -> dict | None:
+    """The last schedule change: ``{id, what, state: running|done|error, error}``."""
+    with _job_lock:
+        return dict(_job) if _job else None
+
+
+def start_job(what: str, fn, *args) -> dict:
+    """Run a schedule write in the background (it can take longer than a request may)."""
+    with _job_lock:
+        if _job.get("state") == "running":
+            raise Invalid("Still saving the last change — try again in a moment")
+        _job.clear()
+        _job.update(id=uuid.uuid4().hex, what=what, state="running", error=None)
+        jid = _job["id"]
+
+    def run():
+        error = None
+        try:
+            fn(*args)
+        except (Invalid, NotFound) as exc:
+            error = str(exc)
+        except cloud.NotConfigured:
+            error = "Gemstone isn't set up yet"
+        except cloud.CloudError as exc:
+            logger.warning("Schedule %s failed: %s", what, exc)
+            error = "Gemstone didn't confirm the change — check the schedule and try again"
+        except Exception:
+            logger.exception("Schedule %s failed", what)
+            error = "Something went wrong saving that"
+        finally:
+            if threading.current_thread() is not threading.main_thread():
+                try:
+                    from django.db import connection
+
+                    connection.close()
+                except Exception:
+                    logger.debug("Couldn't close the job's DB connection", exc_info=True)
+        with _job_lock:
+            if _job.get("id") == jid:
+                _job.update(state="error" if error else "done", error=error)
+    _spawn(run)
+    return job()
 
 
 # ---------------------------------------------------------------- designs and folders

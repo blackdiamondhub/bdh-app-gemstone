@@ -23,6 +23,18 @@ number of controllers.
 - **Create** — pick colours, an animation, speed, brightness and direction. Designs save
   automatically; "↺ Discard changes" (shown once you edit a saved design) puts back the design
   as it was when Create opened. "Show on house" tries the design on the real lights while you edit.
+- **Plan** (admins only) — 📅 in the rail. **Coming up** shows what plays on each group of lights
+  over the next 2 weeks (or the season), merging Autopilot and schedules; whatever is beaten is
+  shown struck through under the winner. Below it the **Autopilot** settings and the
+  **Schedules**: a saved design on some lights, every day / some days / a date range, from
+  sunset, sunrise or a time (sunset/sunrise can be shifted) until a time or sunrise. A schedule
+  is one Gemstone timer per light; matching timers made in the Gemstone app show as one schedule.
+  Saves go to the lights one at a time (each waits for the controller to confirm), so they run in
+  the background. Two schedules of the same kind starting at exactly the same time on the same
+  lights are refused. What wins: date ranges, then Autopilot, then every day / some days; among
+  equals the latest start, and when it ends the lights go back to whatever else is still on.
+  Tonight shows the playing schedule (📅 … · until …) to everyone, or when it resumes after
+  someone played something else.
 - **Setup** (admins, hub Settings → Gemstone → Photos & light paths) — per controller, upload a
   photo of the house and draw the light runs on it. The preview spaces dots evenly along each run
   and patterns flow through the runs in the order they were drawn. Tap a point to delete it, or a

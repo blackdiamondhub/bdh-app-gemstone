@@ -1,15 +1,14 @@
-/* Gemstone Lights — Settings → Autopilot. Plain JS, no build step. */
+/* Gemstone Lights — the Autopilot card on the Plan tab (admins only). Plain JS, no build step.
+   The Plan tab loads its data and calls GemstoneAutopilot.mount(data). */
 (function () {
   'use strict';
   const root = document.getElementById('ap');
-  const data = JSON.parse((document.getElementById('ap-data') || {}).textContent || 'null');
-  if (!root || !data || !document.getElementById('ap-body')) return;
+  if (!root || !document.getElementById('ap-body')) return;
   const $ = (id) => document.getElementById(id);
-  const csrf = (root.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
+  const csrf = (document.querySelector('[name=csrfmiddlewaretoken]') || {}).value || '';
   const API = root.dataset.autopilotUrl;
   const OFF_MIN = -120, OFF_MAX = 120, OFF_STEP = 5;
-  let A = data.settings;
-  const CATS = data.categories || { general: [], teams: [], leagues: [] };
+  let data = null, A = null, CATS = { general: [], teams: [], leagues: [] };
 
   function h(tag, cls, text) {
     const e = document.createElement(tag);
@@ -179,7 +178,7 @@
   }
 
   // ---------------------------------------------------------------- teams
-  const teamById = new Map(CATS.teams.map((t) => [t.id, t]));
+  let teamById = new Map();
   function renderTeams() {
     const box = $('ap-teams');
     box.textContent = '';
@@ -274,6 +273,16 @@
     renderTeams();
     if (!$('ap-sheet').hidden) renderPick();
   }
-  render();
-  renderEvents();
+  window.GemstoneAutopilot = {
+    mount(d) {
+      if (!d || !d.settings) return;
+      data = d;
+      A = d.settings;
+      CATS = d.categories || { general: [], teams: [], leagues: [] };
+      teamById = new Map(CATS.teams.map((t) => [t.id, t]));
+      root.hidden = false;
+      render();
+      renderEvents();
+    },
+  };
 })();
