@@ -1598,7 +1598,8 @@ def schedule_now(now=None) -> dict | None:
 
     ``{"name", "until"}`` while a schedule is playing, ``{"name", "resumes"}``
     once someone has played something else (or turned the lights off) during
-    one, or None when no schedule has the lights.
+    one, ``{"name", "starts", "until"}`` when a schedule wins later today, or
+    None when no schedule has the lights tonight.
     """
     now = _local_now(now)
     scheds = [s for s in schedules() if s["enabled"]]
@@ -1609,10 +1610,18 @@ def schedule_now(now=None) -> dict | None:
     day = now.date()
     entries = (_entries(scheds, day - dt.timedelta(days=1), day + dt.timedelta(days=8), tz, sun)
                + _autopilot_entries(day - dt.timedelta(days=1), day + dt.timedelta(days=1), tz, sun))
+    upcoming = None
     for c in controllers():
         mine = [e for e in entries if c["id"] in e["lights"]]
         win = winner(mine, now)
-        if win is None or win["kind"] == "autopilot":
+        if win is None:
+            nxt = min((e for e in mine if now < e["start"] and e["start"].date() == day
+                       and e["kind"] != "autopilot" and winner(mine, e["start"]) is e),
+                      key=lambda e: e["start"], default=None)
+            if nxt and (upcoming is None or nxt["start"] < upcoming["start"]):
+                upcoming = nxt
+            continue
+        if win["kind"] == "autopilot":
             continue
         s = _first_state([c["id"]])
         sched = next(x for x in scheds if x["id"] == win["key"])
@@ -1624,6 +1633,9 @@ def schedule_now(now=None) -> dict | None:
         if nxt is None:
             return None
         return {"name": nxt["name"], "resumes": nxt["start"].isoformat()}
+    if upcoming:
+        return {"name": upcoming["name"], "starts": upcoming["start"].isoformat(),
+                "until": upcoming["end"].isoformat()}
     return None
 
 

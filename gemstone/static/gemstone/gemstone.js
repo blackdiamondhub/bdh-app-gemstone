@@ -778,7 +778,17 @@
     return (hh ? hh + 'h ' : '') + (m % 60) + 'm';
   }
   function renderSched() {
-    const sc = S.schedule, b = $('t-sched');
+    const sc = S.schedule, sn = S.schedule_now, b = $('t-sched');
+    // A schedule that has the lights now or later tonight owns the pill, not Autopilot.
+    if (sn && sn.until) {
+      b.hidden = false;
+      b.classList.remove('off');
+      const now = new Date(), until = new Date(sn.until), starts = sn.starts ? new Date(sn.starts) : null;
+      $('t-sched-a').textContent = (starts ? fmtTime(starts) : 'Now') + ' → ' + fmtTime(until) + ' ▾';
+      $('t-sched-b').textContent = '\u{1F4C5} ' + sn.name + ' \u00b7 '
+        + (starts ? 'on at ' + fmtTime(starts) : 'off in ' + leftTxt(until - now));
+      return;
+    }
     b.hidden = !sc;
     if (!sc) return;
     b.classList.toggle('off', !!sc.dark);
@@ -804,7 +814,15 @@
   const guestAfter = (sc) => core.guestAfter(sc, S.guest_fallback);
   const offOptions = (sc) => core.offTimeOptions(sc, { admin: !!S.admin, guestFallback: S.guest_fallback });
   function buildSched(p) {
-    const sc = S.schedule;
+    const sc = S.schedule, sn = S.schedule_now;
+    if (sn && sn.until) {
+      p.appendChild(h('div', 'g-schh', '')).appendChild(h('b', '', '\u{1F4C5} ' + sn.name));
+      p.appendChild(h('div', 'g-schn', (sn.starts ? 'Runs tonight ' + fmtTime(new Date(sn.starts)) : 'Running now')
+        + ' until ' + fmtTime(new Date(sn.until)) + '.'));
+      p.appendChild(h('div', 'g-schs', S.admin ? 'Change it on the Plan tab.'
+        : 'Playing a design takes over until the next schedule starts.'));
+      return;
+    }
     const hd = h('div', 'g-schh');
     hd.appendChild(h('b', '', 'Schedule'));
     const tg = h('button', 'g-tg' + (sc.dark ? '' : ' on'));
@@ -899,20 +917,18 @@
   const EV_KEY = 'gemstone.eventBar.expanded';
   let evOpen = false;
   try { evOpen = localStorage.getItem(EV_KEY) === '1'; } catch (e) { /* private mode */ }
-  // A schedule (a Gemstone timer) that has the lights now, or will take them back.
+  // A schedule that will take the lights back after an override (the pill covers one that has them).
   function renderSchNow() {
     const sn = S.schedule_now, box = $('t-sch');
-    box.hidden = !sn;
-    if (!sn) return;
+    box.hidden = !sn || !sn.resumes;
+    if (box.hidden) return;
     const when = (iso) => {
       const d = new Date(iso), today = new Date();
       const day = d.toDateString() === today.toDateString() ? ''
         : d.toLocaleDateString(undefined, { weekday: 'short' }) + ' ';
       return day + fmtTime(d);
     };
-    $('t-sch-text').textContent = sn.until
-      ? '\u{1F4C5} ' + sn.name + ' \u00b7 until ' + when(sn.until)
-      : '\u{1F4C5} ' + sn.name + ' resumes ' + when(sn.resumes);
+    $('t-sch-text').textContent = '\u{1F4C5} ' + sn.name + ' resumes ' + when(sn.resumes);
   }
   function renderEvent() {
     renderSchNow();
@@ -1231,7 +1247,7 @@
   }
   if (!SETUP) {
   $('t-sched').onclick = (e) => {
-    if (!S.schedule) return;
+    if (!S.schedule && !(S.schedule_now && S.schedule_now.until)) return;
     openPop(e.currentTarget, buildSched, 'g-schp');
   };
   $('t-evh').onclick = () => {
