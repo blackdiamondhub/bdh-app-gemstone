@@ -18,8 +18,6 @@ spec = PluginSpec(
     settings_pages=(
         SettingsPage("Photos & light paths", "gemstone_settings", icon="fas fa-lightbulb",
                      subtitle="A photo of each controller's lights and where they run"),
-        SettingsPage("Autopilot", "gemstone_autopilot", icon="fas fa-robot",
-                     subtitle="Holidays, teams and the nightly schedule"),
     ),
     api_version=2,
     # The Gemstone cloud.

@@ -82,6 +82,11 @@ def _state(request):
         out["tonight_event"] = service.tonight_event()
     except (cloud.CloudError, service.Invalid) as exc:
         log.warning("state (autopilot): %s", exc)
+    # Same for schedules (names and times only: guests see this too).
+    try:
+        out["schedule_now"] = service.schedule_now()
+    except (cloud.CloudError, service.Invalid, service.NotFound) as exc:
+        log.warning("state (schedules): %s", exc)
     return out
 
 
@@ -96,20 +101,6 @@ def settings_page(request):
         raise Http404
     return render(request, "gemstone/settings.html", {"active": "gemstone", "state": _state(request)})
 
-
-@require_GET
-def autopilot_page(request):
-    # Settings → Gemstone → Autopilot. Admins only.
-    if not is_admin(request):
-        raise Http404
-    data = None
-    if cloud.configured():
-        try:
-            data = service.autopilot()
-        except (cloud.CloudError, service.Invalid) as exc:
-            log.warning("autopilot page: %s", exc)
-    return render(request, "gemstone/autopilot.html",
-                  {"active": "gemstone", "configured": cloud.configured(), "autopilot": data})
 
 
 @require_GET
@@ -191,6 +182,48 @@ def autopilot_api(request):
     if request.method == "GET":
         return JsonResponse(service.autopilot())
     return JsonResponse({"settings": service.set_autopilot(_body(request), admin=True)})
+
+
+@require_GET
+@_guarded
+def plan(request):
+    """The Plan tab: schedules, what's coming up, and the last save's progress (admins only)."""
+    _admin_only(request)
+    try:
+        days = int(request.GET.get("days", service.PLAN_DAYS[0]))
+    except ValueError:
+        days = service.PLAN_DAYS[0]
+    if days not in service.PLAN_DAYS:
+        days = service.PLAN_DAYS[0]
+    scheds = service.schedules()
+    return JsonResponse({"schedules": scheds, "timeline": service.plan(days, scheds=scheds),
+                         "days": days, "job": service.job()})
+
+
+@require_POST
+@_guarded
+def schedule_save(request):
+    _admin_only(request)
+    s = service.check_save(_body(request))
+    return JsonResponse({"job": service.start_job("save", service.save_schedule, s)})
+
+
+@require_POST
+@_guarded
+def schedule_toggle(request):
+    _admin_only(request)
+    b = _body(request)
+    enabled = bool(b.get("enabled"))
+    s = service.check_toggle(b.get("id"), enabled)
+    return JsonResponse({"job": service.start_job("toggle", service.toggle_schedule, s["id"], enabled)})
+
+
+@require_POST
+@_guarded
+def schedule_delete(request):
+    _admin_only(request)
+    s = service.check_toggle(_body(request).get("id"), False)
+    return JsonResponse({"job": service.start_job("delete", service.delete_schedule, s["id"])})
 
 
 @require_GET

@@ -25,11 +25,17 @@
      data-fav-url="{% url 'gemstone_fav' %}"
      data-design-delete-url="{% url 'gemstone_design_delete' %}"
      data-design-restore-url="{% url 'gemstone_design_restore' %}"
-     data-photo-url="{% url 'gemstone_photo' 'CID' %}">
+     data-photo-url="{% url 'gemstone_photo' 'CID' %}"{% if state.admin %}
+     data-plan-url="{% url 'gemstone_plan' %}"
+     data-schedule-save-url="{% url 'gemstone_schedule_save' %}"
+     data-schedule-toggle-url="{% url 'gemstone_schedule_toggle' %}"
+     data-schedule-delete-url="{% url 'gemstone_schedule_delete' %}"
+     data-autopilot-api-url="{% url 'gemstone_autopilot_api' %}"{% endif %}>
   {% csrf_token %}
   <nav class="gs-rail" id="gs-rail">
     <a class="ri" data-view="tonight" href="#tonight"><i>🌙</i>Tonight</a>
     <a class="ri" data-view="create" href="#create"><i>🎨</i>Create</a>
+    {% if state.admin %}<a class="ri" data-view="plan" href="#plan"><i>📅</i>Plan</a>{% endif %}
   </nav>
 
   <main class="gs-main">
@@ -64,6 +70,7 @@
           <span class="grow"></span><span class="t-evx" id="t-ev-x">Show ▾</span></button>
         <div class="scroller cards" id="t-evrow" hidden></div>
       </div>
+      <div class="t-sch" id="t-sch" hidden><span id="t-sch-text"></span></div>
       <div class="t-favs" id="t-recent-w" hidden>
         <div class="sh"><h2>🕘 Recently played</h2><span class="g-shr">swipe →</span></div>
         <div class="scroller cards g-drag" id="t-recent"></div>
@@ -118,6 +125,89 @@
       </div>
     </section>
 
+    {% if state.admin %}
+    <!-- Plan (admins only): what plays when, Autopilot, and schedules -->
+    <section class="pg pl-pg" id="v-plan" hidden>
+      <div class="hdr"><button class="g-btn c-back" id="p-back" aria-label="Back to Tonight">‹ Back</button><h1>📅 Plan</h1></div>
+
+      <div class="pl-box">
+        <div class="pl-h"><h2>Coming up</h2><span class="grow"></span>
+          <div class="pl-seg" id="pl-range"><button data-days="14" class="on">2 weeks</button><button data-days="90">Season</button></div></div>
+        <div class="pl-tl" id="pl-tl"><div class="pl-empty">Loading…</div></div>
+      </div>
+
+      <div class="pl-box ap" id="ap" data-autopilot-url="{% url 'gemstone_autopilot_api' %}" hidden>
+        <div class="ap-top">
+          <div><b>🤖 Autopilot</b><span class="t3" id="ap-state"></span></div>
+          <button class="g-tg" id="ap-on" aria-label="Autopilot on or off"><span class="g-sw"></span></button>
+        </div>
+        <div class="ap-grid" id="ap-body">
+          <div class="ap-colm">
+            <div class="ap-box"><h3>Schedule</h3>
+              <div class="g-schr"><div><span class="g-schl">On at sunset</span><div class="g-schs" id="ap-sun"></div></div>
+                <div class="g-step"><button id="ap-minus">−</button><span id="ap-off"></span><button id="ap-plus">+</button></div></div>
+              <div class="g-schr"><span class="g-schl">Off at</span><select class="g-sel" id="ap-offat"></select></div>
+            </div>
+            <div class="ap-box"><h3>Lights</h3><div class="ap-list" id="ap-lights"></div></div>
+            <div class="ap-box"><h3>Patterns</h3>
+              <div class="g-schr"><span class="g-schl">Animated</span><button class="g-tg" id="ap-anim" aria-label="Animated patterns"><span class="g-sw"></span></button></div>
+              <div class="g-schr"><span class="g-schl">Static</span><button class="g-tg" id="ap-static" aria-label="Static patterns"><span class="g-sw"></span></button></div>
+              <div class="sl" id="ap-bright"><div class="f"></div><span class="ic">☀</span><span class="ap-pct" id="ap-bval"></span></div>
+              <div class="g-schs">Brightness for Autopilot patterns</div>
+            </div>
+          </div>
+          <div class="ap-colm">
+            <div class="ap-box"><h3>Celebrate <span class="t3" id="ap-ccount"></span></h3><div class="ap-tiles" id="ap-cats"></div></div>
+            <div class="ap-box"><h3>Teams <span class="t3">Lights up on game days</span></h3>
+              <div class="ap-list" id="ap-teams"></div>
+              <button class="ap-add" id="ap-addteam">＋ Add a team</button></div>
+          </div>
+          <div class="ap-box ap-up"><h3>Events</h3><div class="ap-list" id="ap-events"></div></div>
+        </div>
+        <div class="ap-sheet" id="ap-sheet" hidden>
+          <div class="ap-sheetb">
+            <div class="ap-sheeth"><b>Add teams</b><button class="ap-done" id="ap-done">Done</button></div>
+            <label class="search ap-search"><span>🔍</span><input id="ap-q" type="search" placeholder="Search teams" autocomplete="off"></label>
+            <div class="ap-pills" id="ap-leagues"></div>
+            <div class="ap-list ap-pick" id="ap-pick"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pl-box">
+        <div class="pl-h"><h2>Schedules</h2><span class="grow"></span><button class="pl-new" id="pl-new">＋ New schedule</button></div>
+        <div class="pl-job" id="pl-job" hidden></div>
+        <div class="pl-list" id="pl-list"></div>
+      </div>
+
+      <div class="pl-sheet" id="pl-ed" hidden>
+        <div class="pl-sheetb">
+          <div class="pl-edh"><b id="pl-ed-title">New schedule</b><span class="grow"></span>
+            <button class="pl-btn" id="pl-cancel">Cancel</button><button class="pl-btn pri" id="pl-save">Save</button></div>
+          <div class="pl-f"><label>Design</label>
+            <label class="search pl-search"><span>🔍</span><input id="pl-q" type="search" placeholder="Search designs" autocomplete="off"></label>
+            <div class="pl-designs" id="pl-designs"></div></div>
+          <div class="pl-f"><label>Name</label><input class="pl-in" id="pl-name" maxlength="60" autocomplete="off"></div>
+          <div class="pl-f"><label>Lights</label><div class="pl-lights" id="pl-lights"></div></div>
+          <div class="pl-f"><label>Repeat</label>
+            <div class="pl-seg" id="pl-repeat"><button data-v="daily">Every day</button><button data-v="weekly">Some days</button><button data-v="yearly">Dates</button></div>
+            <div class="pl-days" id="pl-days"></div>
+            <div class="pl-dates" id="pl-dates"><span>From</span><select class="g-sel" id="pl-sm"></select><select class="g-sel" id="pl-sd"></select>
+              <span>to</span><select class="g-sel" id="pl-em"></select><select class="g-sel" id="pl-edd"></select></div></div>
+          <div class="pl-f"><label>On</label>
+            <div class="pl-r2"><div class="pl-seg" id="pl-on"><button data-v="sunset">Sunset</button><button data-v="sunrise">Sunrise</button><button data-v="time">Time</button></div>
+              <div class="g-step" id="pl-offs"><button id="pl-minus">−</button><span id="pl-offv"></span><button id="pl-plus">+</button></div>
+              <input class="pl-in pl-time" type="time" id="pl-ont"></div></div>
+          <div class="pl-f"><label>Off</label>
+            <div class="pl-r2"><div class="pl-seg" id="pl-off"><button data-v="time">Time</button><button data-v="sunrise">Sunrise</button></div>
+              <input class="pl-in pl-time" type="time" id="pl-offt"></div></div>
+          <div class="pl-sum" id="pl-sum"></div>
+          <div class="pl-edf"><button class="pl-btn pl-del" id="pl-del" hidden>🗑 Delete</button></div>
+        </div>
+      </div>
+    </section>
+    {% endif %}
+
   </main>
 
   <div class="pop" id="gs-pop" hidden></div>
@@ -126,5 +216,7 @@
 
 {{ state|json_script:"gs-initial" }}
 <script src="{% static 'gemstone/gemstone-core.js' %}"></script>
+{% if state.admin %}<script src="{% static 'gemstone/autopilot.js' %}"></script>
+<script src="{% static 'gemstone/plan.js' %}"></script>{% endif %}
 <script src="{% static 'gemstone/gemstone.js' %}"></script>
 {% endblock %}
