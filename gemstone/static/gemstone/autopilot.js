@@ -240,7 +240,8 @@
       box.appendChild(t);
     }
     if (!list.length) box.appendChild(h('div', 'g-schs', 'Nothing coming up. Pick some holidays or teams.'));
-    list.slice(0, 20).forEach((e) => {
+    $('ap-ecount').textContent = list.length ? String(list.length) : '';
+    list.slice(0, 60).forEach((e) => {
       const d = parseDay(e.start);
       const r = h('div', 'ap-ev' + (e.tonight ? ' on' : ''));
       const dt = h('div', 'ap-date');
@@ -256,13 +257,39 @@
   }
 
   // ---------------------------------------------------------------- page
+  const FOLD_KEY = 'gs-ap-folded';
+  let folded = false;
+  try { folded = localStorage.getItem(FOLD_KEY) === '1'; } catch (e) { /* private mode */ }
+  function nextEvent() {
+    const list = (data && data.upcoming) || [];
+    const e = list.find((x) => x.tonight) || list[0];
+    if (!e) return '';
+    return (e.tonight ? 'tonight: ' : 'next: ') + (e.emoji ? e.emoji + ' ' : '') + e.name + (e.tonight ? '' : ', ' + day(e.start));
+  }
+  function stateText() {
+    if (!A.enabled) return folded ? ' · off' : " · off — the lights won't come on by themselves";
+    const nx = folded ? nextEvent() : '';
+    return ' · on' + (nx ? ' · ' + nx : '');
+  }
+  function renderFold() {
+    root.classList.toggle('ap-folded', folded);
+    $('ap-body').hidden = folded;
+    $('ap-fold').setAttribute('aria-expanded', String(!folded));
+    $('ap-fold').setAttribute('aria-label', folded ? 'Show Autopilot settings' : 'Hide Autopilot settings');
+    if (A) $('ap-state').textContent = stateText();
+  }
+  $('ap-fold').onclick = () => {
+    folded = !folded;
+    try { localStorage.setItem(FOLD_KEY, folded ? '1' : '0'); } catch (e) { /* private mode */ }
+    renderFold();
+  };
   $('ap-on').onclick = () => {
     const v = !A.enabled;
     save({ enabled: v }, (s) => { s.enabled = v; if (!v) s.device_ids = []; }, v ? 'Autopilot on' : 'Autopilot off');
   };
   function render() {
     toggle($('ap-on'), A.enabled);
-    $('ap-state').textContent = A.enabled ? ' · on' : " · off — the lights won't come on by themselves";
+    $('ap-state').textContent = stateText();
     $('ap-body').classList.toggle('ap-dim', !A.enabled);
     toggle($('ap-anim'), A.allow_animated);
     toggle($('ap-static'), A.allow_static);
@@ -283,6 +310,7 @@
       root.hidden = false;
       render();
       renderEvents();
+      renderFold();
     },
   };
 })();

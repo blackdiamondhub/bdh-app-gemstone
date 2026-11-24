@@ -154,3 +154,24 @@ test('both previews dim with brightness via dimOf', () => {
   assert.ok(/dimOf\(p\)/.test(body('strip')), 'strip() ignores brightness');
   assert.ok((js.match(/dimOf\(/g) || []).length >= 2, 'Scene ignores brightness');
 });
+
+// The Autopilot Events list can be dozens of rows; it must scroll inside a box no
+// taller than its neighbours instead of stretching the Plan page (seen on MI, b22).
+test('Autopilot Events scroll inside a capped box at every width', () => {
+  const rule = (sel, src) => (src.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\{([^}]*)\\}')) || [])[1] || '';
+  assert.match(html, /class="ap-list ap-scroll" id="ap-events"/);
+  assert.match(rule('.gs .ap .ap-scroll', css), /overflow-y:auto/);
+  assert.match(rule('.gs .ap .ap-scroll', css), /min-height:0/);
+  assert.match(rule('.gs .ap .ap-up', css), /contain:size/, 'wide: the row height must come from the other columns');
+  const narrow = css.match(/@media \(max-width:1300px\)\{([\s\S]*?)\n\}/)[1];
+  assert.match(rule('.gs .ap .ap-up', narrow), /max-height:\d+px/, 'full-width Events needs a fixed cap');
+});
+
+test('the Autopilot card folds and remembers it', () => {
+  const ap = fs.readFileSync(path.join(base, 'static/gemstone/autopilot.js'), 'utf8');
+  assert.match(html, /<button class="ap-fold" id="ap-fold" aria-expanded="true" aria-controls="ap-body">/);
+  assert.match(ap, /localStorage\.getItem\(FOLD_KEY\)/);
+  assert.match(ap, /localStorage\.setItem\(FOLD_KEY/);
+  assert.match(ap, /\$\('ap-body'\)\.hidden = folded/);
+  assert.match(ap, /renderFold\(\);\r?\n    \},/, 'mount() must apply the saved fold state');
+});

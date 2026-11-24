@@ -460,6 +460,16 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .ap .ap-date small{color:#f5c451;font-weight:700;font-size:12px}
 .gs .ap .ap-date b{font-size:26px}
 .gs .ap .ap-bar{display:block;width:64px;height:10px;border-radius:5px;margin-top:6px}
+/* Events can run to dozens of rows: on wide screens the box fills the row the other two
+   columns set (contain:size keeps its own rows out of that height) and scrolls inside. */
+.gs .ap .ap-up{align-self:stretch;contain:size;min-height:360px}
+.gs .ap .ap-up h3{flex:none}
+.gs .ap .ap-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.gs .ap .ap-fold{display:flex;align-items:center;gap:12px;min-height:52px;flex:1;min-width:0;text-align:left;font-size:20px;color:inherit}
+.gs .ap .ap-fold .t3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gs .ap .ap-chev{display:inline-block;width:12px;height:12px;margin:0 8px 6px;flex:none;border-right:3px solid var(--t2);border-bottom:3px solid var(--t2);transform:rotate(45deg);transition:transform .2s}
+.gs .ap.ap-folded .ap-chev{transform:rotate(-45deg);margin-bottom:0}
+.gs .ap.ap-folded .ap-top{margin-bottom:0}
 .gs .ap .ap-sheet{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.6);display:flex;align-items:flex-start;justify-content:center;padding:6vh 16px}
 .gs .ap .ap-sheetb{width:min(760px,100%);max-height:88vh;background:var(--s1);border-radius:24px;padding:22px 24px;display:flex;flex-direction:column;gap:14px;box-shadow:0 10px 40px #000a}
 .gs .ap .ap-sheeth{display:flex;align-items:center;justify-content:space-between;font-size:24px}
@@ -472,7 +482,7 @@ body.gs-page{background:#0B0D10;overflow:hidden}
 .gs .ap .ap-pick .ap-check{border-bottom:1px solid var(--s2);border-radius:0}
 @media (max-width:1300px){
   .gs .ap .ap-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-  .gs .ap .ap-up{grid-column:1 / -1}
+  .gs .ap .ap-up{grid-column:1 / -1;contain:none;min-height:0;max-height:460px}
 }
 @media (max-width:760px){
   .gs .ap .ap-grid{grid-template-columns:minmax(0,1fr)}
