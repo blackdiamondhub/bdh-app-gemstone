@@ -1713,6 +1713,15 @@ class ScheduleTests(Fresh, TestCase):
         self.assertEqual(set(later), {"name", "resumes"})
         self.assertEqual(dt.datetime.fromisoformat(later["resumes"]), self.local(16, 30) + dt.timedelta(days=1))
 
+    def test_tonight_line_before_a_schedule_starts(self):
+        # Midday, lights off: tonight belongs to the orange schedule, so Tonight says so.
+        soon = service.schedule_now(self.local(12))
+        self.assertEqual(soon["name"], "1 on, 3 off Orange")
+        self.assertEqual((dt.datetime.fromisoformat(soon["starts"]), dt.datetime.fromisoformat(soon["until"])),
+                         (self.local(16, 30), self.local(22)))
+        # After it ends, tomorrow's run isn't "tonight".
+        self.assertIsNone(service.schedule_now(self.local(23)))
+
     def test_guests_get_nothing_from_the_plan(self):
         for name, method in (("gemstone_plan", "get"), ("gemstone_schedule_save", "post"),
                              ("gemstone_schedule_toggle", "post"), ("gemstone_schedule_delete", "post")):
