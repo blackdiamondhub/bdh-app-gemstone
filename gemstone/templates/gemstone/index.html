@@ -138,7 +138,7 @@
 
       <div class="pl-box ap" id="ap" data-autopilot-url="{% url 'gemstone_autopilot_api' %}" hidden>
         <div class="ap-top">
-          <div><b>🤖 Autopilot</b><span class="t3" id="ap-state"></span></div>
+          <button class="ap-fold" id="ap-fold" aria-expanded="true" aria-controls="ap-body"><span class="ap-chev" aria-hidden="true"></span><b>🤖 Autopilot</b><span class="t3" id="ap-state"></span></button>
           <button class="g-tg" id="ap-on" aria-label="Autopilot on or off"><span class="g-sw"></span></button>
         </div>
         <div class="ap-grid" id="ap-body">
@@ -162,7 +162,7 @@
               <div class="ap-list" id="ap-teams"></div>
               <button class="ap-add" id="ap-addteam">＋ Add a team</button></div>
           </div>
-          <div class="ap-box ap-up"><h3>Events</h3><div class="ap-list" id="ap-events"></div></div>
+          <div class="ap-box ap-up"><h3>Events <span class="t3" id="ap-ecount"></span></h3><div class="ap-list ap-scroll" id="ap-events"></div></div>
         </div>
         <div class="ap-sheet" id="ap-sheet" hidden>
           <div class="ap-sheetb">
