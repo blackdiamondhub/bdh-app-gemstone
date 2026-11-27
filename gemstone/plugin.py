@@ -19,6 +19,10 @@ spec = PluginSpec(
         SettingsPage("Photos & light paths", "gemstone_settings", icon="fas fa-lightbulb",
                      subtitle="A photo of each controller's lights and where they run"),
     ),
+    # The assistant can say what the lights are doing and turn them on/off, to a pattern or
+    # colour, brighter or dimmer.
+    tools="gemstone.assistant.tools",
+    run_tool="gemstone.assistant.run_tool",
     api_version=2,
     # The Gemstone cloud.
     network=NETWORK_OUTBOUND,

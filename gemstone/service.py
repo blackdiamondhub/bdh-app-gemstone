@@ -549,9 +549,14 @@ def note_outside_plays(now=None) -> list[str]:
     return counted
 
 
-def play(ids, ref) -> dict:
+def play(ids, ref, *, brightness=None) -> dict:
+    """Play ``ref`` on ``ids``; ``brightness`` (1-100 %) overrides the pattern's own."""
     ids = check_ids(ids)
     pattern = _resolve(ref)
+    if brightness is not None:
+        pattern.brightness = round(_clamp(brightness, 1, 100, "brightness") * 255 / 100)
+        if pattern.raw:  # to_api() sends raw as-is
+            pattern.raw = dict(pattern.raw, brightness=pattern.brightness)
     snapshot = _snapshot(ids)
     _play(ids, pattern)
     log_command("play", ids, pattern=pattern.name)
