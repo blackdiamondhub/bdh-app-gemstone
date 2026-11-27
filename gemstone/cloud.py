@@ -183,6 +183,15 @@ def read(key: str, ttl: float, fn: Callable[[Any], Awaitable[Any]]) -> Any:
     return value
 
 
+def peek(key: str, ttl: float) -> Any:
+    """``key``'s cached read if it is under ``ttl`` seconds old, else None (never calls the cloud)."""
+    with _cache_lock:
+        hit = _cache.get(key)
+    if hit and time.monotonic() - hit[0] < ttl:
+        return hit[1]
+    return None
+
+
 def write(fn: Callable[[Any], Awaitable[Any]], *, invalidate: tuple[str, ...] = ()) -> Any:
     """Run ``fn(client)`` as the only write in flight, ``WRITE_GAP`` after the last one."""
     global _last_write

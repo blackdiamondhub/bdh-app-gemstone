@@ -1755,3 +1755,181 @@ class ScheduleTests(Fresh, TestCase):
         data = self.client.get(reverse("gemstone_state")).json()
         self.assertIsNone(data.get("schedule_now"))
         self.assertTrue(data["controllers"])
+
+
+# ---------------------------------------------------------------- assistant tools
+
+from bdh_sdk import ALL_MODES  # noqa: E402
+from bdh_sdk.plugins import GUEST, OWNER  # noqa: E402
+from bdh_sdk.tools import ToolError  # noqa: E402
+
+from gemstone import assistant, matching  # noqa: E402
+
+
+class AssistantMatchingTests(SimpleTestCase):
+    def setUp(self):
+        self.zones = matching.Zones([{"id": "g", "name": "BDL-Gemstone", "label": "House"},
+                                     {"id": "t", "name": "Hot Tub", "label": "Hot Tub"}], primary="g")
+
+    def ids(self, text):
+        return [z["id"] for z in self.zones.resolve(text)]
+
+    def test_zones(self):
+        for text in ("", None, "outside", "the outdoor lights", "gemstone lights", "all of them", "both"):
+            self.assertEqual(self.ids(text), ["g", "t"], text)
+        self.assertEqual(self.ids("house lights"), ["g"])
+        self.assertEqual(self.ids("the roof"), ["g"])
+        self.assertEqual(self.ids("BDL"), ["g"])
+        self.assertEqual(self.ids("hot tube"), ["t"])
+        self.assertEqual(self.ids("house and hot tub"), ["g", "t"])
+        with self.assertRaises(matching.NoMatch) as cm:
+            self.zones.resolve("garage")
+        self.assertIn("House and Hot Tub", str(cm.exception))
+
+    def test_ambiguous_zone_asks_and_plural_means_all(self):
+        zones = matching.Zones([{"id": "f", "name": "Front Deck", "label": "Front Deck"},
+                                {"id": "b", "name": "Back Deck", "label": "Back Deck"}])
+        with self.assertRaises(matching.Ambiguous) as cm:
+            zones.resolve("deck")
+        self.assertIn("Front Deck and Back Deck", str(cm.exception))
+        self.assertEqual([z["id"] for z in zones.resolve("the decks")], ["f", "b"])
+
+    PATS = [{"id": "1", "name": "Christmas 3R 3G"}, {"id": "2", "name": "Traditional Christmas"},
+            {"id": "3", "name": "Christmas Glam"},
+            {"id": "4", "name": "Holly & Berry Jingle", "folder_name": "Christmas"},
+            {"id": "5", "name": "Halloween Boooo"}, {"id": "6", "name": "Warm White", "fav": True},
+            {"id": "7", "name": "Glitter - Canucks"}, {"id": "8", "name": "Chase - Canucks", "fav": True}]
+
+    def test_pattern_words_favourites_and_plays(self):
+        best, others = matching.find_pattern("christmas", self.PATS)
+        self.assertEqual(best["name"], "Christmas Glam")  # every word, most of the name, shortest
+        self.assertEqual({o["name"] for o in others},
+                         {"Traditional Christmas", "Christmas 3R 3G", "Holly & Berry Jingle"})
+        best, _ = matching.find_pattern("christmas", self.PATS, plays={"2": {"n": 4}})
+        self.assertEqual(best["name"], "Traditional Christmas")
+        self.assertEqual(matching.find_pattern("canucks pattern", self.PATS)[0]["name"], "Chase - Canucks")
+        self.assertEqual(matching.find_pattern("traditional christmas", self.PATS)[0]["id"], "2")
+        self.assertEqual(matching.find_pattern("holly and berry", self.PATS)[0]["id"], "4")
+
+    def test_pattern_asr_slips_and_unknown(self):
+        self.assertEqual(matching.find_pattern("haloween", self.PATS)[0]["name"], "Halloween Boooo")
+        self.assertIsNone(matching.find_pattern("easter", self.PATS))
+        self.assertIn("Christmas Glam", matching.suggest("christmass glum", self.PATS))
+        self.assertEqual(matching.popular(self.PATS)[:2], ["Warm White", "Chase - Canucks"])
+
+    def test_colours(self):
+        self.assertEqual(matching.find_colour("blue"), ("Blue", "#2f6bff"))
+        self.assertEqual(matching.find_colour("Warm White"), ("Warm white", "#fff1e0"))
+        self.assertEqual(matching.find_colour("turquoise")[0], "Teal")
+        self.assertEqual(matching.find_colour("purpel")[0], "Purple")
+        self.assertEqual(matching.find_colour("#00FF00")[1], "#00ff00")
+        self.assertIsNone(matching.find_colour("plaid"))
+
+
+class AssistantTests(Fresh, TestCase):
+    def setUp(self):
+        super().setUp()
+        self.fake.devices_[0] = Device.from_api({"id": "house", "name": "BDL-Gemstone",
+                                                 "hub": {"pixelCount": [150, 50]}, "online": True})
+        self.xmas = str(uuid.uuid4())
+        self.glam = str(uuid.uuid4())
+        FIXTURE_IDS.update({self.xmas, self.glam})
+        self.addCleanup(FIXTURE_IDS.difference_update, {self.xmas, self.glam})
+        self.fake.fps += [self.fake._fp("f-ours", pat(self.xmas, "Traditional Christmas", (0xFF0000, 0xFF00)), NOW),
+                          self.fake._fp("f-ours", pat(self.glam, "Christmas Glam", (0xFFD700,)), NOW)]
+        service.record_play(self.xmas)
+        # The warm-up loads the library on another thread; tests load it themselves.
+        patch.object(assistant, "_warm").start()
+
+    def run_tool(self, tool, mode=GUEST, **args):
+        return assistant.run_tool(tool, args, mode)
+
+    def test_declarations(self):
+        from gemstone.plugin import spec
+        self.assertEqual((spec.tools, spec.run_tool), ("gemstone.assistant.tools", "gemstone.assistant.run_tool"))
+        service.controllers()
+        tools = {t.id: t for t in assistant.tools(GUEST)}
+        self.assertEqual(set(tools), {"lights_status", "set_lights"})
+        self.assertTrue(all(t.modes == ALL_MODES and not t.confirm for t in tools.values()))
+        self.assertTrue(tools["lights_status"].readonly)
+        self.assertFalse(tools["set_lights"].readonly)
+        self.assertIn("House, Hot Tub", tools["set_lights"].params["properties"]["zone"]["description"])
+        with self.assertRaises(ToolError):
+            assistant.run_tool("nope", {}, GUEST)
+
+    def test_status_is_compact(self):
+        patch.object(service, "tonight_event", return_value=None).start()
+        text = self.run_tool("lights_status")
+        self.assertEqual(text, "House: on, Warm white, 100%. Hot Tub: off. Autopilot is on until 9 PM.")
+        self.assertTrue(self.run_tool("lights_status", zone="hot tub").startswith("Hot Tub: off."))
+        self.assertEqual(self.fake.writes, [])
+
+    def test_on_off(self):
+        self.assertEqual(self.run_tool("set_lights", on=True, zone="hot tube"),
+                         "The Hot Tub lights are on, playing Blue." + assistant._until_note())
+        self.assertTrue(self.fake.states["tub"]["onState"])
+        self.assertTrue(service.until()["guest"])  # guests' lights go off by 10 PM, as on the page
+        self.assertIn("already on", self.run_tool("set_lights", on=True))
+        self.assertEqual(self.run_tool("set_lights", on=False), "The lights are off now.")
+        self.assertFalse(self.fake.states["house"]["onState"] or self.fake.states["tub"]["onState"])
+        self.assertIsNone(service.until())
+        self.assertEqual(self.run_tool("set_lights", on=False, zone="house"), "The House lights are already off.")
+        self.run_tool("set_lights", on=True, mode=OWNER)
+        self.assertIsNone(service.until())  # owners aren't limited
+        self.assertEqual(service.activity()[0]["by"], "admin")
+
+    def test_pattern_by_theme(self):
+        text = self.run_tool("set_lights", pattern="christmas")
+        self.assertTrue(text.startswith("The lights are on Traditional Christmas."), text)  # the most played
+        self.assertIn("Others: Christmas Glam", text)
+        self.assertEqual([a for a in self.fake.ops("play")], [("house", "Traditional Christmas"),
+                                                              ("tub", "Traditional Christmas")])
+        self.assertEqual(service.activity()[0]["by"], "guest")
+
+    def test_unknown_pattern_suggests(self):
+        with self.assertRaises(ToolError) as cm:
+            self.run_tool("set_lights", pattern="chrismas tree")
+        self.assertIn("Close ones", str(cm.exception))
+        self.assertIn("Christmas Glam", str(cm.exception))
+        with self.assertRaises(ToolError) as cm:
+            self.run_tool("set_lights", pattern="zzzz")
+        self.assertIn("Some favourites", str(cm.exception))
+        self.assertEqual(self.fake.writes, [])
+
+    def test_library_pattern_once_loaded(self):
+        with self.assertRaises(ToolError):
+            self.run_tool("set_lights", pattern="candy cane")
+        service.library()
+        self.assertIn("Candy cane", self.run_tool("set_lights", pattern="candy cane", zone="house"))
+
+    def test_colour(self):
+        text = self.run_tool("set_lights", color="blue", zone="house")
+        self.assertEqual(text, "The House lights are on blue.")
+        self.assertEqual(self.fake.states["house"]["pattern"]["id"], service.solid_id("#2f6bff"))
+        with self.assertRaises(ToolError) as cm:
+            self.run_tool("set_lights", color="plaid")
+        self.assertIn("warm white", str(cm.exception))
+
+    def test_pattern_at_a_brightness(self):
+        self.run_tool("set_lights", pattern="christmas glam", brightness=40, zone="house")
+        self.assertEqual(self.fake.states["house"]["pattern"]["brightness"], 102)
+        self.assertEqual(len(self.fake.ops("play")), 1)
+
+    def test_brightness(self):
+        self.assertEqual(self.run_tool("set_lights", brightness=50),
+                         "The lights are at 50%. The Hot Tub is off.")
+        self.assertEqual(self.fake.states["house"]["pattern"]["brightness"], 128)
+        self.assertFalse(self.fake.states["tub"]["onState"])
+        self.assertEqual(self.run_tool("set_lights", brightness_change="down", zone="house"),
+                         "The House lights are at 30%.")
+        self.assertEqual(self.run_tool("set_lights", brightness_change="up", by=50, zone="house"),
+                         "The House lights are at 80%.")
+        self.assertEqual(self.run_tool("set_lights", brightness_change="down", zone="hot tub"),
+                         "The Hot Tub lights are off. Turn them on first.")
+        self.assertEqual(self.run_tool("set_lights", brightness=0, zone="house"), "The House lights are off now.")
+
+    def test_bad_requests(self):
+        for args in ({}, {"on": False, "pattern": "christmas"}, {"pattern": "christmas", "color": "red"}):
+            with self.assertRaises(ToolError):
+                self.run_tool("set_lights", **args)
+        self.assertEqual(self.fake.writes, [])

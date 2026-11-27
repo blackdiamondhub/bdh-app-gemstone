@@ -50,6 +50,26 @@ schedule a guest's off time must be strictly after tonight's on time (sunset + o
 later than 10 PM; without a location (no sunset) it must be after 5 PM instead. Admins aren't
 limited.
 
+## Assistant tools
+
+The hub's voice assistant can use two tools, in every mode (guest, dashboard, owner):
+
+| Tool | |
+|---|---|
+| `lights_status` | Read-only: each controller on/off, its pattern and brightness, a guest "off at" time, and tonight's schedule or Autopilot. |
+| `set_lights` | Turn lights on or off, play a pattern (`pattern`), a solid colour (`color`), or set brightness (`brightness` 0–100, or `brightness_change` up/down by `by`, default 20). |
+
+`zone` names the lights loosely: left out, "outside", "all" or "gemstone" means every controller;
+"house" (or "roof", "lodge") means the largest controller, which is called "House" when its name
+is the product's (e.g. "BDL-Gemstone"); near misses ("hot tube") are corrected and an ambiguous name
+asks back. A pattern is matched by its words against your folders' patterns (favourites, then the
+most played, then the shortest name win; "christmas" plays "Traditional Christmas" and names a few
+others), then against Gemstone's library once it's loaded; an unknown name gets a few close ones.
+Colours are the Tonight page's solid swatches plus yellow, aqua and magenta (and synonyms like
+turquoise or amber). Like the page, lights a guest turns on go off by 10 PM, and brightness never
+turns a light on. The tools never create, edit or delete patterns, and never change schedules or
+Autopilot.
+
 ## Settings
 
 | Setting | |
